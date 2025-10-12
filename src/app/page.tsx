@@ -5,10 +5,21 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { GameCanvas } from '../components/GameCanvas';
 import { PowerUpBar } from '../components/PowerUpBar';
 import type { GameState, ServerMessage } from './types';
+import { soundManager } from '../lib/SoundManager';
 
 type ConnectionStatus =
   | 'disconnected' | 'registering' | 'authenticating'
   | 'finding_lobby' | 'connecting' | 'connected';
+
+// Define a type for our Visual Effects (VFX)
+interface VFX {
+    id: number;
+    type: 'sparkle' | 'explosion';
+    x: number;
+    y: number;
+    createdAt: number;
+    duration: number; // in ms
+}
 
 // Константа с бэкенда, чтобы клиент знал, за какое время должно пройти "перемещение"
 const SERVER_TICK_RATE = 150; // ms
@@ -28,13 +39,16 @@ export default function HomePage() {
   const [renderTrigger, setRenderTrigger] = useState(0);
   // --- END ---
 
+  // State to manage active visual effects
+  const [vfx, setVfx] = useState<VFX[]>([]);
+
   const [deadPlayerIds, setDeadPlayerIds] = useState<Set<string>>(new Set());
   const socketRef = useRef<WebSocket | null>(null);
 
-  // --- START: Input Queue Logic ---
-  // This ref will hold the last direction key pressed by the user.
-  const pendingDirectionRef = useRef<'up' | 'down' | 'left' | 'right' | null>(null);
-  // --- END: Input Queue Logic ---
+  // --- START: Input Logic ---
+  // ЗАМЕНИТЕ pendingDirectionRef на это:
+  const lastSentDirectionRef = useRef<'up' | 'down' | 'left' | 'right' | null>(null);
+  // --- END: Input Logic ---
 
   const sendWsMessage = (message: object) => {
     if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
@@ -46,7 +60,7 @@ export default function HomePage() {
     sendWsMessage({ action: 'use_powerup', slot });
   };
 
-  // --- Updated Key Handler ---
+  // --- Обновленный обработчик нажатий ---
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (document.activeElement?.tagName === 'INPUT') return;
@@ -59,14 +73,18 @@ export default function HomePage() {
         case 'ArrowRight': case 'KeyD': direction = 'right'; break;
       }
 
-      // Instead of sending immediately, we store the latest intended direction.
+      // Логика направления - отправляем сразу
       if (direction) {
         e.preventDefault();
-        pendingDirectionRef.current = direction;
+        // Защита от спама: отправляем команду, только если направление изменилось
+        if (direction !== lastSentDirectionRef.current) {
+          sendWsMessage({ action: 'turn', direction });
+          lastSentDirectionRef.current = direction; // Запоминаем последнее отправленное
+        }
         return;
       }
 
-      // Power-up usage remains immediate.
+      // Логика способностей остается без изменений
       switch (code) {
         case 'Digit1': e.preventDefault(); handleUsePowerUp(0); break;
         case 'Digit2': e.preventDefault(); handleUsePowerUp(1); break;
@@ -75,10 +93,12 @@ export default function HomePage() {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []); // No dependencies needed, refs don't cause re-renders.
+  }, []); // Зависимости не нужны
 
   // --- START: Главный цикл отрисовки ---
   const gameLoop = useCallback(() => {
+    // Cleanup expired VFX to prevent memory leaks
+    setVfx(prev => prev.filter(effect => Date.now() - effect.createdAt < effect.duration));
     setRenderTrigger(performance.now()); // Обновляем триггер, чтобы канвас перерисовался
     animationFrameId.current = requestAnimationFrame(gameLoop);
   }, []);
@@ -94,6 +114,51 @@ export default function HomePage() {
     };
   }, [status, gameLoop]);
   // --- END ---
+
+  // New useEffect to detect game events and trigger effects
+  useEffect(() => {
+    if (!currentState || !previousState || !playerId) return;
+
+    const myOldPlayer = previousState.players[playerId];
+    const myNewPlayer = currentState.players[playerId];
+    const myOldSnake = previousState.snakes.find(s => s.id === playerId);
+    const myNewSnake = currentState.snakes.find(s => s.id === playerId);
+
+    if (!myOldPlayer || !myNewPlayer || !myOldSnake || !myNewSnake) return;
+
+    // 1. Detect Food Eaten (snake length increased)
+    if (myNewSnake.body.length > myOldSnake.body.length) {
+      soundManager.play('eat');
+      const head = myNewSnake.body[0];
+      // Add a "sparkle" effect at the snake's head
+      setVfx(prev => [...prev, {
+        id: Date.now(),
+        type: 'sparkle',
+        x: head.x,
+        y: head.y,
+        createdAt: Date.now(),
+        duration: 300
+      }]);
+    }
+
+    // 2. Detect Power-Up Pickup (a slot changed from null to something)
+    const pickedUp = myNewPlayer.powerUpSlots.some((slot, i) => slot && !myOldPlayer.powerUpSlots[i]);
+    if (pickedUp) {
+      soundManager.play('powerup');
+    }
+
+    // 3. Detect Firing a Projectile
+    if (currentState.projectiles.length > previousState.projectiles.length) {
+      // Check if the new projectile belongs to the current player
+      const myNewProjectile = currentState.projectiles.find(p => 
+        p.ownerId === playerId && !previousState.projectiles.some(op => op.id === p.id)
+      );
+      if (myNewProjectile) {
+        soundManager.play('shoot');
+      }
+    }
+
+  }, [currentState, previousState, playerId]);
 
 
   const handleConnect = async () => {
@@ -136,7 +201,10 @@ export default function HomePage() {
       const socket = new WebSocket(wsUrl);
       socketRef.current = socket;
 
-      socket.onopen = () => setStatus('connected');
+      socket.onopen = () => {
+        setStatus('connected');
+        soundManager.play('connect'); // Play sound on successful connection
+      };
       socket.onmessage = (event) => {
         const message: ServerMessage = JSON.parse(event.data);
         switch (message.type) {
@@ -147,16 +215,31 @@ export default function HomePage() {
             });
             setLastStateTimestamp(Date.now());
 
-            // --- Send Queued Input ---
-            // Now that we have a new state, it's the perfect time to send our next move.
-            if (pendingDirectionRef.current) {
-              sendWsMessage({ action: 'turn', direction: pendingDirectionRef.current });
-              pendingDirectionRef.current = null; // Clear the queue after sending
-            }
-            // --- End ---
+            // --- УДАЛИТЕ ЭТОТ БЛОК ---
+            // if (pendingDirectionRef.current) {
+            //   sendWsMessage({ action: 'turn', direction: pendingDirectionRef.current });
+            //   pendingDirectionRef.current = null; 
+            // }
+            // --- КОНЕЦ БЛОКА НА УДАЛЕНИЕ ---
             break;
           case 'player_died':
+            soundManager.play('death'); // Play death sound
             setDeadPlayerIds(prev => new Set(prev).add(message.payload.playerId));
+            
+            // Find the dead snake's head to create an explosion VFX
+            const deadSnake = currentState?.snakes.find(s => s.id === message.payload.playerId);
+            if (deadSnake && deadSnake.body.length > 0) {
+              const head = deadSnake.body[0];
+              setVfx(prev => [...prev, {
+                id: Date.now(),
+                type: 'explosion',
+                x: head.x,
+                y: head.y,
+                createdAt: Date.now(),
+                duration: 400,
+              }]);
+            }
+
             setTimeout(() => {
               setDeadPlayerIds(prev => {
                 const next = new Set(prev);
@@ -167,7 +250,7 @@ export default function HomePage() {
             break;
         }
       };
-      socket.onclose = () => { setStatus('disconnected'); setCurrentState(null); setPreviousState(null); pendingDirectionRef.current = null; };
+      socket.onclose = () => { setStatus('disconnected'); setCurrentState(null); setPreviousState(null); lastSentDirectionRef.current = null; };
       socket.onerror = () => { setError('Connection error.'); setStatus('disconnected'); };
 
     } catch (err) {
@@ -191,7 +274,7 @@ export default function HomePage() {
     setStatus('disconnected');
     setDeadPlayerIds(new Set());
     setError(null);
-    pendingDirectionRef.current = null; // Clear on disconnect
+    lastSentDirectionRef.current = null; // Clear on disconnect
   };
 
   const isConnecting = status !== 'disconnected' && status !== 'connected';
@@ -232,6 +315,7 @@ export default function HomePage() {
               playerId={playerId}
               deadPlayerIds={deadPlayerIds}
               renderTrigger={renderTrigger}
+              vfx={vfx}
             />
           </div>
 

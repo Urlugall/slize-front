@@ -4,6 +4,15 @@
 import { useEffect, useRef } from 'react';
 import type { GameState, PowerUpType } from '../app/types';
 
+interface VFX {
+    id: number;
+    type: 'sparkle' | 'explosion';
+    x: number;
+    y: number;
+    createdAt: number;
+    duration: number; // in ms
+}
+
 interface GameCanvasProps {
     previousState: GameState | null;
     currentState: GameState | null;
@@ -11,6 +20,7 @@ interface GameCanvasProps {
     playerId: string | null;
     deadPlayerIds: Set<string>;
     renderTrigger: number;
+    vfx: VFX[];
 }
 
 const CELL_SIZE = 20;
@@ -50,7 +60,8 @@ export function GameCanvas({
     lastStateTimestamp,
     playerId,
     deadPlayerIds,
-    renderTrigger
+    renderTrigger,
+    vfx
 }: GameCanvasProps) {
     const canvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -185,7 +196,42 @@ export function GameCanvas({
             }
         });
 
-    }, [currentState, previousState, playerId, deadPlayerIds, lastStateTimestamp, renderTrigger]);
+        // 6. Render Visual Effects (VFX)
+        vfx.forEach(effect => {
+            const age = Date.now() - effect.createdAt;
+            const progress = age / effect.duration; // 0.0 to 1.0
+
+            if (progress > 1) return;
+
+            const centerX = effect.x * CELL_SIZE + CELL_SIZE / 2;
+            const centerY = effect.y * CELL_SIZE + CELL_SIZE / 2;
+
+            ctx.save();
+            if (effect.type === 'sparkle') {
+                const particleCount = 5;
+                const maxRadius = CELL_SIZE * 0.8;
+                for (let i = 0; i < particleCount; i++) {
+                    const angle = (i / particleCount) * 2 * Math.PI;
+                    const radius = maxRadius * progress;
+                    const x = centerX + Math.cos(angle) * radius;
+                    const y = centerY + Math.sin(angle) * radius;
+                    
+                    ctx.fillStyle = `rgba(251, 191, 36, ${1 - progress})`; // Fading yellow
+                    ctx.beginPath();
+                    ctx.arc(x, y, 3 * (1 - progress), 0, 2 * Math.PI);
+                    ctx.fill();
+                }
+            } else if (effect.type === 'explosion') {
+                const radius = CELL_SIZE * 1.5 * progress;
+                ctx.fillStyle = `rgba(220, 38, 38, ${0.5 * (1 - progress)})`; // Fading red circle
+                ctx.beginPath();
+                ctx.arc(centerX, centerY, radius, 0, 2 * Math.PI);
+                ctx.fill();
+            }
+            ctx.restore();
+        });
+
+    }, [currentState, previousState, playerId, deadPlayerIds, lastStateTimestamp, renderTrigger, vfx]);
 
     return <canvas ref={canvasRef} className="border-4 border-gray-300 rounded-xl shadow-xl transition duration-500 hover:shadow-teal-400/50" />;
 }
