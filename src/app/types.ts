@@ -1,7 +1,7 @@
 // src/app/types.ts
 
 // --- Power-Ups ---
-export type PowerUpType = 'SpeedBoost' | 'Stop' | 'ScoreBoost' | 'Projectile' | 'Ghost' | 'Reverse'; // <-- ADDED: Ghost and Reverse
+export type PowerUpType = 'SpeedBoost' | 'ScoreBoost' | 'Projectile' | 'Ghost' | 'Reverse'; // <-- ADDED: Ghost and Reverse
 
 export interface PowerUp {
     id: string;
@@ -22,9 +22,8 @@ export interface PlayerInfo {
     score: number;
     powerUpSlots: (PowerUpType | null)[];
     activeEffects: {
-        isStoppedUntil: number;
         speedBoostUntil: number;
-        isGhostUntil: number; // <-- ADDED: Ghost effect
+        isGhostUntil: number;
     };
 }
 
