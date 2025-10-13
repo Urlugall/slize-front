@@ -1,7 +1,7 @@
 // src/app/types.ts
 
 // --- Power-Ups ---
-export type PowerUpType = 'SpeedBoost' | 'ScoreBoost' | 'Projectile' | 'Ghost' | 'Reverse'; // <-- ADDED: Ghost and Reverse
+export type PowerUpType = 'SpeedBoost' | 'ScoreBoost' | 'Projectile' | 'Ghost' | 'Reverse' | 'Swap';
 
 export interface PowerUp {
     id: string;

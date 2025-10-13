@@ -46,6 +46,7 @@ const POWERUP_VISUALS: Record<PowerUpType, { icon: string, color: string }> = {
     Projectile: { icon: '🚀', color: '#4F46E5' },
     Ghost: { icon: '👻', color: '#A855F7' },
     Reverse: { icon: '🔄', color: '#00B8D9' },
+    Swap: { icon: '↔️', color: '#EC4899' },
 };
 
 const lerp = (start: number, end: number, t: number) => start + (end - start) * t;

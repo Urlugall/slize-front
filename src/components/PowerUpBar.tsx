@@ -15,6 +15,7 @@ const POWERUP_ICONS: Record<PowerUpType, string> = {
     Projectile: '🚀',
     Ghost: '👻',
     Reverse: '🔄',
+    Swap: '↔️',
 };
 
 export function PowerUpBar({ powerUpSlots, onUsePowerUp }: PowerUpBarProps) {
