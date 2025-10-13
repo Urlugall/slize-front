@@ -306,7 +306,7 @@ export default function HomePage() {
               playerId={playerId}
               deadPlayerIds={deadPlayerIds}
               renderTrigger={renderTrigger} // Важно для перерисовки
-              vfx={vfx}
+              vfx={vfx} 
             />
           </div>
           <div className="order-2 xl:order-3 w-full max-w-sm xl:w-full">
