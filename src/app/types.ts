@@ -9,6 +9,11 @@ export interface PowerUp {
     position: { x: number; y: number };
 }
 
+export interface Snake {
+    id: string;
+    body: { x: number; y: number }[];
+}
+
 export interface ProjectileState {
     id: string;
     ownerId: string;

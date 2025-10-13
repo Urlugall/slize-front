@@ -1,10 +1,9 @@
 // src/components/GameCanvas.tsx
 "use client";
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useMemo } from 'react';
 import type { GameState, PowerUpType } from '../app/types';
 
-// ... (интерфейсы VFX, GameCanvasProps и константы без изменений)
 interface VFX {
     id: number;
     type: 'sparkle' | 'explosion';
@@ -13,6 +12,7 @@ interface VFX {
     createdAt: number;
     duration: number; // in ms
 }
+
 interface GameCanvasProps {
     previousState: GameState | null;
     currentState: GameState | null;
@@ -22,10 +22,11 @@ interface GameCanvasProps {
     renderTrigger: number;
     vfx: VFX[];
 }
+
 const CELL_SIZE = 20;
-const SERVER_TICK_RATE = 150;
+const SERVER_TICK_RATE = 150; // Важно, чтобы это значение соответствовало серверному
 const COLORS = {
-    background: '#F0F0F0',
+    background: '#F7FAFC',
     grid: '#D1D5DB',
     food: '#F59E0B',
     mySnake: '#00796B',
@@ -39,7 +40,6 @@ const COLORS = {
     ghostEffect: 'rgba(0, 200, 255, 0.3)',
 };
 
-// --- ИЗМЕНЕНИЕ: Убран 'Stop' ---
 const POWERUP_VISUALS: Record<PowerUpType, { icon: string, color: string }> = {
     SpeedBoost: { icon: '⚡', color: '#F59E0B' },
     ScoreBoost: { icon: '💰', color: '#10B981' },
@@ -57,27 +57,27 @@ export function GameCanvas({
     lastStateTimestamp,
     playerId,
     deadPlayerIds,
-    renderTrigger,
-    vfx
+    renderTrigger, // Используем renderTrigger вместо прямого currentState
+    vfx,
 }: GameCanvasProps) {
     const canvasRef = useRef<HTMLCanvasElement>(null);
 
     useEffect(() => {
         const gameState = currentState;
         if (!canvasRef.current || !gameState) return;
-
         const canvas = canvasRef.current;
         const ctx = canvas.getContext('2d');
         if (!ctx) return;
 
-        // ... (код отрисовки поля, еды и пауэр-апов без изменений)
         const now = Date.now();
         const elapsed = now - lastStateTimestamp;
         const interpolationFactor = Math.min(elapsed / SERVER_TICK_RATE, 1.0);
-        const { gridSize, food, players, powerUps, projectiles } = gameState;
+        const { gridSize, food, players, powerUps, snakes, projectiles } = gameState;
         const canvasSize = gridSize * CELL_SIZE;
         canvas.width = canvasSize;
         canvas.height = canvasSize;
+
+        // --- Отрисовка фона, сетки, еды, бонусов (без изменений) ---
         ctx.fillStyle = COLORS.background;
         ctx.fillRect(0, 0, canvasSize, canvasSize);
         ctx.strokeStyle = COLORS.grid;
@@ -103,34 +103,53 @@ export function GameCanvas({
             const visual = POWERUP_VISUALS[p.type as PowerUpType] || { icon: '?', color: 'gray' };
             ctx.fillText(visual.icon, x + CELL_SIZE / 2, y + CELL_SIZE / 2 + 1);
         });
+
+        // --- Отрисовка снарядов с интерполяцией ---
         projectiles.forEach(currentProj => {
             const prevProj = previousState?.projectiles.find(p => p.id === currentProj.id);
-            const projPosX = prevProj ? lerp(prevProj.position.x, currentProj.position.x, interpolationFactor) * CELL_SIZE : currentProj.position.x * CELL_SIZE;
-            const projPosY = prevProj ? lerp(prevProj.position.y, currentProj.position.y, interpolationFactor) * CELL_SIZE : currentProj.position.y * CELL_SIZE;
+            const startX = prevProj?.position.x ?? currentProj.position.x;
+            const startY = prevProj?.position.y ?? currentProj.position.y;
+            const projPosX = lerp(startX, currentProj.position.x, interpolationFactor);
+            const projPosY = lerp(startY, currentProj.position.y, interpolationFactor);
+
             ctx.fillStyle = COLORS.projectile;
-            ctx.fillRect(projPosX, projPosY, CELL_SIZE, CELL_SIZE);
+            ctx.fillRect(projPosX * CELL_SIZE, projPosY * CELL_SIZE, CELL_SIZE, CELL_SIZE);
         });
 
-        gameState.snakes.forEach(currentSnake => {
-            // ... (код отрисовки змеек до эффектов без изменений)
+        // --- Отрисовка змеек с ИСПРАВЛЕННОЙ интерполяцией ---
+        snakes.forEach(currentSnake => {
             const prevSnake = previousState?.snakes.find(s => s.id === currentSnake.id);
             const isDead = deadPlayerIds.has(currentSnake.id);
             const isMe = currentSnake.id === playerId;
             const playerInfo = players[currentSnake.id];
             const isGhost = playerInfo?.activeEffects.isGhostUntil > now;
             const baseOpacity = isGhost ? 0.5 : 1.0;
-            
+
             currentSnake.body.forEach((currentSegment, index) => {
-                const prevSegment = prevSnake?.body[index];
-                const posX = prevSegment ? lerp(prevSegment.x, currentSegment.x, interpolationFactor) * CELL_SIZE : currentSegment.x * CELL_SIZE;
-                const posY = prevSegment ? lerp(prevSegment.y, currentSegment.y, interpolationFactor) * CELL_SIZE : currentSegment.y * CELL_SIZE;
+                let prevSegment = prevSnake?.body[index];
+
+                // --- ГЛАВНЫЙ ФИКС: Плавный рост и движение ---
+                if (!prevSegment && prevSnake && prevSnake.body.length > 0) {
+                    // Если это новый сегмент (змея выросла), его стартовая позиция
+                    // для интерполяции - это позиция предыдущего сегмента из прошлого состояния.
+                    // Это создает эффект "вытягивания" хвоста.
+                    prevSegment = prevSnake.body[index - 1] || prevSnake.body[prevSnake.body.length - 1];
+                }
+
+                const startX = prevSegment?.x ?? currentSegment.x;
+                const startY = prevSegment?.y ?? currentSegment.y;
+
+                const posX = lerp(startX, currentSegment.x, interpolationFactor) * CELL_SIZE;
+                const posY = lerp(startY, currentSegment.y, interpolationFactor) * CELL_SIZE;
+
                 const baseColor = isDead ? COLORS.deadSnake : (isMe ? COLORS.mySnake : COLORS.otherSnake);
                 ctx.fillStyle = `rgba(${parseInt(baseColor.slice(1, 3), 16)}, ${parseInt(baseColor.slice(3, 5), 16)}, ${parseInt(baseColor.slice(5, 7), 16)}, ${baseOpacity})`;
                 ctx.fillRect(posX, posY, CELL_SIZE, CELL_SIZE);
-                ctx.strokeStyle = COLORS.background; ctx.lineWidth = 0.5;
+                ctx.strokeStyle = `rgba(${parseInt(COLORS.background.slice(1, 3), 16)}, ${parseInt(COLORS.background.slice(3, 5), 16)}, ${parseInt(COLORS.background.slice(5, 7), 16)}, 0.5)`;
+                ctx.lineWidth = 1;
                 ctx.strokeRect(posX, posY, CELL_SIZE, CELL_SIZE);
 
-                if (index === 0) {
+                if (index === 0) { // Эффекты для головы
                     if (playerInfo?.activeEffects.speedBoostUntil > now) {
                         ctx.shadowColor = COLORS.speedBoostEffect; ctx.shadowBlur = 10;
                         ctx.fillRect(posX, posY, CELL_SIZE, CELL_SIZE);
@@ -140,33 +159,34 @@ export function GameCanvas({
                         ctx.fillStyle = COLORS.ghostEffect;
                         ctx.fillRect(posX, posY, CELL_SIZE, CELL_SIZE);
                     }
+                    // Глаза
                     ctx.fillStyle = COLORS.eyes;
                     const eyeSize = 4, eyeOffset = 4;
                     ctx.fillRect(posX + eyeOffset, posY + eyeOffset, eyeSize, eyeSize);
                     ctx.fillRect(posX + CELL_SIZE - eyeOffset - eyeSize, posY + eyeOffset, eyeSize, eyeSize);
-                    
-                    // --- НАЧАЛО ИЗМЕНЕНИЯ: Удален блок отрисовки эффекта 'Stop' ---
-                    // if (playerInfo?.activeEffects.isStoppedUntil > now) { ... }
-                    // --- КОНЕЦ ИЗМЕНЕНИЯ ---
                 }
             });
         });
 
-        // ... (код отрисовки никнеймов и VFX без изменений)
-        gameState.snakes.forEach(currentSnake => {
+        // --- Отрисовка никнеймов с интерполяцией ---
+        snakes.forEach(currentSnake => {
             const nickname = players[currentSnake.id]?.nickname || '';
             if (currentSnake.body.length > 0) {
                 const prevSnake = previousState?.snakes.find(s => s.id === currentSnake.id);
                 const currentHead = currentSnake.body[0];
                 const prevHead = prevSnake?.body[0] || currentHead;
+
                 const textX = lerp(prevHead.x, currentHead.x, interpolationFactor) * CELL_SIZE + CELL_SIZE / 2;
                 const textY = lerp(prevHead.y, currentHead.y, interpolationFactor) * CELL_SIZE - 6;
+
                 ctx.fillStyle = COLORS.nickname; ctx.font = 'bold 12px sans-serif'; ctx.textAlign = 'center';
                 ctx.shadowColor = 'rgba(255,255,255,0.7)'; ctx.shadowBlur = 3;
                 ctx.fillText(nickname, textX, textY);
                 ctx.shadowBlur = 0;
             }
         });
+
+        // Отрисовка VFX (без изменений)
         vfx.forEach(effect => {
             const age = Date.now() - effect.createdAt;
             const progress = age / effect.duration;
@@ -197,7 +217,7 @@ export function GameCanvas({
             ctx.restore();
         });
 
-    }, [currentState, previousState, playerId, deadPlayerIds, lastStateTimestamp, renderTrigger, vfx]);
+    }, [currentState, previousState, lastStateTimestamp, playerId, deadPlayerIds, renderTrigger, vfx]);
 
     return <canvas ref={canvasRef} className="border-4 border-gray-300 rounded-xl shadow-xl transition duration-500 hover:shadow-teal-400/50" />;
 }
