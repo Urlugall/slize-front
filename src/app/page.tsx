@@ -39,10 +39,11 @@ interface VFX {
 
 export default function HomePage() {
   const [nickname, setNickname] = useState('');
+  const [token, setToken] = useState<string | null>(null);
   const [playerId, setPlayerId] = useState<string | null>(null);
   const [status, setStatus] = useState<ConnectionStatus>('disconnected');
   const [error, setError] = useState<string | null>(null);
-  
+
   // --- ИЗМЕНЕНИЕ: Возвращаем состояния для интерполяции ---
   const [previousState, setPreviousState] = useState<GameState | null>(null);
   const [currentState, setCurrentState] = useState<GameState | null>(null);
@@ -107,8 +108,38 @@ export default function HomePage() {
     if (latestInput && actualDirection && latestInput !== lastSentDirectionRef.current && !isOpposite(actualDirection, latestInput)) {
       sendWsMessage({ action: 'turn', direction: latestInput });
       lastSentDirectionRef.current = latestInput;
+
+      // --- ПРЕДУГАДЫВАНИЕ ---
+      // Сразу применяем поворот к локальному состоянию, не дожидаясь ответа сервера.
+      // Это сделает управление мгновенно отзывчивым.
+      setCurrentState(prev => {
+        if (!prev || !playerId) return prev;
+        const mySnake = prev.snakes.find(s => s.id === playerId);
+        if (!mySnake) return prev;
+
+        // Эта логика должна симулировать 1 шаг движения.
+        // Для простоты, мы просто "поворачиваем" голову,
+        // а сервер потом пришлет корректное полное состояние.
+        // В более сложных системах тут была бы полная симуляция движения.
+        const newHead = { ...mySnake.body[0] };
+        switch (latestInput) {
+          case 'up': newHead.y--; break;
+          case 'down': newHead.y++; break;
+          case 'left': newHead.x--; break;
+          case 'right': newHead.x++; break;
+        }
+
+        const newBody = [newHead, ...mySnake.body.slice(0, -1)];
+
+        return {
+          ...prev,
+          snakes: prev.snakes.map(s => s.id === playerId ? { ...s, body: newBody } : s)
+        };
+      });
+      // Обновляем текущее направление для дальнейших проверок
+      myCurrentDirectionRef.current = latestInput;
     }
-    
+
     // Очистка старых VFX и запуск нового кадра
     setVfx(prev => prev.filter(effect => Date.now() - effect.createdAt < effect.duration));
     setRenderTrigger(performance.now()); // Триггер для canvas
@@ -169,6 +200,18 @@ export default function HomePage() {
     }
   }, [currentState, playerId]); // previousStateForEffectsRef is a ref, no need to list it
 
+  useEffect(() => {
+    const savedToken = localStorage.getItem('slize_token');
+    const savedPlayerId = localStorage.getItem('slize_playerId');
+    const savedNickname = localStorage.getItem('slize_nickname');
+
+    if (savedToken && savedPlayerId && savedNickname) {
+      setToken(savedToken);
+      setPlayerId(savedPlayerId);
+      setNickname(savedNickname);
+    }
+  }, []);
+
   const handleConnect = async () => {
     if (nickname.trim().length < 3) {
       setError("Nickname must be at least 3 characters.");
@@ -206,10 +249,29 @@ export default function HomePage() {
       socket.onopen = () => {
         setStatus('connected');
         soundManager.play('connect');
+
+        // ВАЖНО: корректно закрываем WS при уходе/перезагрузке,
+        // чтобы DO сразу получил close и не держал "зомби".
+        const onUnload = () => socket.close(1000, 'Page unloading');
+        window.addEventListener('pagehide', onUnload);   // мобильные/Safari
+        window.addEventListener('beforeunload', onUnload);
+
+        // снять подписки при закрытии
+        socket.onclose = () => {
+          window.removeEventListener('pagehide', onUnload);
+          window.removeEventListener('beforeunload', onUnload);
+          setStatus('disconnected');
+        };
       };
 
       socket.onmessage = (event) => {
+        if (event.data === 'ping') {
+          socketRef.current?.send('pong');
+          return;
+        }
+
         const message: ServerMessage = JSON.parse(event.data);
+
         switch (message.type) {
           case 'state':
             // --- ИЗМЕНЕНИЕ: Правильно обновляем оба состояния ---
@@ -257,7 +319,6 @@ export default function HomePage() {
       socketRef.current.close(1000, 'User initiated disconnect');
     }
     setStatus('disconnected');
-    setPlayerId(null);
     setError(null);
     // Сброс состояний
     setCurrentState(null);
@@ -306,7 +367,7 @@ export default function HomePage() {
               playerId={playerId}
               deadPlayerIds={deadPlayerIds}
               renderTrigger={renderTrigger} // Важно для перерисовки
-              vfx={vfx} 
+              vfx={vfx}
             />
           </div>
           <div className="order-2 xl:order-3 w-full max-w-sm xl:w-full">
