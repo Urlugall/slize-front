@@ -185,6 +185,7 @@ export function GameCanvas({
     if (!ctx) return;
 
     ctx.clearRect(0, 0, canvasSize, canvasSize);
+    const wallClockNow = Date.now();
 
     const elapsed = Math.max(0, now - lastTsRef.current);
     const t = Math.min(elapsed / SERVER_TICK_RATE, 1.0);
@@ -199,6 +200,31 @@ export function GameCanvas({
       if (progress >= 1) gridTransitionRef.current = null;
     } else {
       drawGridLayer(ctx, canvasSize, cellSize, 1);
+    }
+
+    // block cells (two-phase shrink)
+    if (game.blocks?.length) {
+      ctx.save();
+      for (let i = 0; i < game.blocks.length; i++) {
+        const block = game.blocks[i];
+        const x = block.x * cellSize;
+        const y = block.y * cellSize;
+
+        if (block.state === 'warning') {
+          const phase = Math.abs(Math.sin(now / 300));
+          ctx.fillStyle = phase > 0.5 ? COLORS.blockPulse : COLORS.blockWarning;
+          ctx.fillRect(x, y, cellSize, cellSize);
+        } else if (block.state === 'kill') {
+          // убийственные блоки — красные
+          ctx.fillStyle = COLORS.blockKill;
+          ctx.fillRect(x, y, cellSize, cellSize);
+        } else {
+          // solid (если появится)
+          ctx.fillStyle = COLORS.blockSolid;
+          ctx.fillRect(x, y, cellSize, cellSize);
+        }
+      }
+      ctx.restore();
     }
 
     // food
@@ -392,6 +418,43 @@ export function GameCanvas({
       }
       ctx.restore();
     }
+
+    if (game.pendingResize) {
+      const { announcedAt, warnMs, killMs, to } = game.pendingResize;
+      const fillAt = announcedAt + warnMs;
+      const shrinkAt = fillAt + killMs;
+
+      const nowWall = wallClockNow;
+
+      let text = '';
+      if (nowWall < fillAt) {
+        const msLeft = fillAt - nowWall;
+        text = `Zone turns deadly in ${(msLeft / 1000).toFixed(1)}s (target ${to}x${to})`;
+      } else if (nowWall < shrinkAt) {
+        const msLeft = shrinkAt - nowWall;
+        text = `Shrinking in ${(msLeft / 1000).toFixed(1)}s (to ${to}x${to})`;
+      } else {
+        text = `Shrinking...`;
+      }
+
+      ctx.save();
+      const fontSize = Math.max(12, cellSize * 0.7);
+      ctx.font = `bold ${fontSize}px sans-serif`;
+      const paddingX = 12;
+      const paddingY = 6;
+      const measurement = ctx.measureText(text);
+      const boxWidth = measurement.width + paddingX * 2;
+      const boxHeight = fontSize + paddingY * 2;
+      const boxX = (canvasSize - boxWidth) / 2;
+      const boxY = Math.max(8, cellSize * 0.15);
+      ctx.fillStyle = 'rgba(17, 24, 39, 0.75)';
+      ctx.fillRect(boxX, boxY, boxWidth, boxHeight);
+      ctx.fillStyle = '#FFFFFF';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(text, canvasSize / 2, boxY + boxHeight / 2);
+      ctx.restore();
+    }
   };
 
   // RAF loop owned by canvas
@@ -401,56 +464,59 @@ export function GameCanvas({
       rafRef.current = requestAnimationFrame(tick);
     };
     rafRef.current = requestAnimationFrame(tick);
-    return () => { if (rafRef.current) cancelAnimationFrame(rafRef.current); };
-  }, []);
-
-  // initial static draw and on gridSize/devicePixelRatio changes
-  useEffect(() => {
-    const gridSize = currentState?.gridSize;
-    if (!gridSize || gridSize <= 0) return;
-    const metrics = resolveMetrics(gridSize);
-    if (!metrics) return;
-    const previousGrid = lastGridSizeRef.current;
-    if (previousGrid && previousGrid !== gridSize) {
-      // Для корректной анимации перехода сетки считаем старый cellSize так же, как текущий.
-      const previousCell =
-        (BASE_CELL_SIZE *
-          (BASE_GRID_SIZE + VISUAL_SCALE_FACTOR * (previousGrid - BASE_GRID_SIZE))) /
-        previousGrid;
-      gridTransitionRef.current = {
-        from: previousCell,
-        to: metrics.cellSize,
-        startedAt: performance.now(),
-      };
-    }
-    lastGridSizeRef.current = gridSize;
-    drawStatic();
-  }, [currentState?.gridSize]);
-
-  useEffect(() => {
-    const ro = new ResizeObserver(() => {
-      drawStatic();
-    });
-    if (wrapperRef.current) ro.observe(wrapperRef.current);
-    const onDpr = () => drawStatic();
-    window.addEventListener('resize', onDpr);
     return () => {
-      ro.disconnect();
-      window.removeEventListener('resize', onDpr);
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
     };
   }, []);
 
-  const gridSizeForLayout = currStateRef.current?.gridSize ?? currentState?.gridSize ?? null;
-  const metricsForLayout = resolveMetrics(gridSizeForLayout);
-  const cssSize = metricsForLayout?.canvasSize ?? 0;
-  return (
-    <div
-      ref={wrapperRef}
-      style={{ position: 'relative', width: cssSize, height: cssSize, overflow: 'hidden' }}
-      className="box-content rounded-xl shadow-xl border-4 border-gray-300"
-    >
-      <canvas ref={staticCanvasRef} style={{ position: 'absolute', inset: 0 }} />
-      <canvas ref={dynamicCanvasRef} style={{ position: 'absolute', inset: 0 }} />
-    </div>
-  );
-}
+    // initial static draw and on gridSize/devicePixelRatio changes
+    useEffect(() => {
+      const gridSize = currentState?.gridSize;
+      if (!gridSize || gridSize <= 0) return;
+      const metrics = resolveMetrics(gridSize);
+      if (!metrics) return;
+      const previousGrid = lastGridSizeRef.current;
+      if (previousGrid && previousGrid !== gridSize) {
+        // Для корректной анимации перехода сетки считаем старый cellSize так же, как текущий.
+        const previousCell =
+          (BASE_CELL_SIZE *
+            (BASE_GRID_SIZE + VISUAL_SCALE_FACTOR * (previousGrid - BASE_GRID_SIZE))) /
+          previousGrid;
+        gridTransitionRef.current = {
+          from: previousCell,
+          to: metrics.cellSize,
+          startedAt: performance.now(),
+        };
+      }
+      lastGridSizeRef.current = gridSize;
+      drawStatic();
+    }, [currentState?.gridSize]);
+
+    useEffect(() => {
+      const ro = new ResizeObserver(() => {
+        drawStatic();
+      });
+      if (wrapperRef.current) ro.observe(wrapperRef.current);
+      const onDpr = () => drawStatic();
+      window.addEventListener('resize', onDpr);
+      return () => {
+        ro.disconnect();
+        window.removeEventListener('resize', onDpr);
+      };
+    }, []);
+
+    const gridSizeForLayout = currStateRef.current?.gridSize ?? currentState?.gridSize ?? null;
+    const metricsForLayout = resolveMetrics(gridSizeForLayout);
+    const cssSize = metricsForLayout?.canvasSize ?? 0;
+    return (
+      <div
+        ref={wrapperRef}
+        style={{ position: 'relative', width: cssSize, height: cssSize, overflow: 'hidden' }}
+        className="box-content rounded-xl shadow-xl border-4 border-gray-300"
+      >
+        <canvas ref={staticCanvasRef} style={{ position: 'absolute', inset: 0 }} />
+        <canvas ref={dynamicCanvasRef} style={{ position: 'absolute', inset: 0 }} />
+      </div>
+    );
+  }
+

@@ -21,6 +21,24 @@ export interface ProjectileState {
   direction: 'up' | 'down' | 'left' | 'right';
 }
 
+export type BlockCellState = 'warning' | 'kill' | 'solid';
+
+export interface BlockCell {
+  x: number;
+  y: number;
+  state: BlockCellState;
+  activateAt: number;
+  expireAt?: number;
+}
+
+export interface PendingResize {
+  from: number;
+  to: number;
+  announcedAt: number;
+  warnMs: number;
+  killMs: number;
+}
+
 // --- Player Info ---
 export interface PlayerInfo {
   nickname: string;
@@ -42,6 +60,8 @@ export interface GameState {
   powerUps: PowerUp[];
   projectiles: ProjectileState[];
   gameOver?: string;
+  blocks?: BlockCell[];
+  pendingResize?: PendingResize;
 }
 
 // --- Server Messages ---
@@ -50,4 +70,3 @@ export type ServerMessage =
   | { type: 'player_joined'; payload: { playerId: string; nickname: string } }
   | { type: 'player_left'; payload: { playerId: string } }
   | { type: 'player_died'; payload: { playerId: string } };
-
