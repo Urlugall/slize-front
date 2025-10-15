@@ -85,7 +85,7 @@ export function GameCanvas({
     if (ctx) {
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       // Favor crisp pixel rendering for grid/rectangles
-      (ctx as any).imageSmoothingEnabled = false;
+      ctx.imageSmoothingEnabled = false;
     }
   };
 
