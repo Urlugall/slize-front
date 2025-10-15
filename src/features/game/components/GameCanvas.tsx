@@ -3,7 +3,7 @@
 
 import { useEffect, useRef } from 'react';
 import type { GameState, PowerUpType } from '@/features/game/types';
-import { BASE_CELL_SIZE, SERVER_TICK_RATE, COLORS, POWERUP_VISUALS } from '@/features/game/config';
+import { BASE_CELL_SIZE, SERVER_TICK_RATE, COLORS, POWERUP_VISUALS, BASE_GRID_SIZE, VISUAL_SCALE_FACTOR } from '@/features/game/config';
 
 interface VFX {
   id: number;
@@ -59,7 +59,6 @@ export function GameCanvas({
   const playerIdRef = useRef<string | null>(null);
   const deadIdsRef = useRef<Set<string>>(new Set());
   const vfxRef = useRef<VFX[]>([]);
-  const baseCanvasSizeRef = useRef<number | null>(null);
   const lastGridSizeRef = useRef<number | null>(null);
   const gridTransitionRef = useRef<{ from: number; to: number; startedAt: number } | null>(null);
 
@@ -92,10 +91,8 @@ export function GameCanvas({
 
   const resolveMetrics = (gridSize?: number | null) => {
     if (!gridSize || gridSize <= 0) return null;
-    if (!baseCanvasSizeRef.current) {
-      baseCanvasSizeRef.current = gridSize * BASE_CELL_SIZE;
-    }
-    const canvasSize = baseCanvasSizeRef.current;
+    const canvasSize =
+      BASE_CELL_SIZE * (BASE_GRID_SIZE + VISUAL_SCALE_FACTOR * (gridSize - BASE_GRID_SIZE));
     const cellSize = canvasSize / gridSize;
     return { canvasSize, cellSize, gridSize };
   };
@@ -414,8 +411,12 @@ export function GameCanvas({
     const metrics = resolveMetrics(gridSize);
     if (!metrics) return;
     const previousGrid = lastGridSizeRef.current;
-    if (previousGrid && previousGrid !== gridSize && baseCanvasSizeRef.current) {
-      const previousCell = baseCanvasSizeRef.current / previousGrid;
+    if (previousGrid && previousGrid !== gridSize) {
+      // Для корректной анимации перехода сетки считаем старый cellSize так же, как текущий.
+      const previousCell =
+        (BASE_CELL_SIZE *
+          (BASE_GRID_SIZE + VISUAL_SCALE_FACTOR * (previousGrid - BASE_GRID_SIZE))) /
+        previousGrid;
       gridTransitionRef.current = {
         from: previousCell,
         to: metrics.cellSize,

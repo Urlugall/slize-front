@@ -2,6 +2,8 @@ import type { PowerUpType } from "./types";
 
 export const BASE_CELL_SIZE = 20;
 export const SERVER_TICK_RATE = 150; // ms per server tick
+export const BASE_GRID_SIZE = 32;
+export const VISUAL_SCALE_FACTOR = 0.25;
 
 export const COLORS = {
   background: "#F7FAFC",
