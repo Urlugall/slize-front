@@ -1,0 +1,101 @@
+}
+// src/app/page.tsx
+"use client";
+
+import { useState, useEffect, useRef, useCallback } from 'react';
+import { GameCanvas } from '@/features/game/components/GameCanvas';
+import { PowerUpBar } from '@/features/game/components/PowerUpBar';
+import type { GameState, ServerMessage } from '@/features/game/types';
+import { soundManager } from '@/features/game/lib/SoundManager';
+
+type ConnectionStatus =
+  | 'disconnected' | 'authenticating'
+  | 'finding_lobby' | 'connecting' | 'connected';
+
+type Direction = 'up' | 'down' | 'left' | 'right';
+
+const getDirectionFromSnake = (snake: { body: { x: number, y: number }[] }): Direction | null => {
+  if (snake.body.length < 2) return null;
+  const head = snake.body[0];
+  const neck = snake.body[1];
+  if (head.x > neck.x) return 'right';
+  if (head.x < neck.x) return 'left';
+  if (head.y > neck.y) return 'down';
+  if (head.y < neck.y) return 'up';
+  return null;
+};
+
+const isOpposite = (d1: Direction, d2: Direction) =>
+  (d1 === 'up' && d2 === 'down') || (d1 === 'down' && d2 === 'up') ||
+  (d1 === 'left' && d2 === 'right') || (d1 === 'right' && d2 === 'left');
+
+interface VFX {
+  id: number;
+  type: 'sparkle' | 'explosion';
+  x: number;
+  y: number;
+  createdAt: number;
+  duration: number; // in ms
+}
+
+export default function HomePage() {
+  const [nickname, setNickname] = useState('');
+  const [token, setToken] = useState<string | null>(null);
+  const [playerId, setPlayerId] = useState<string | null>(null);
+  const [status, setStatus] = useState<ConnectionStatus>('disconnected');
+  const [error, setError] = useState<string | null>(null);
+
+  // --- ИЗМЕНЕНИЕ: Возвращаем состояния для интерполяции ---
+  const [previousState, setPreviousState] = useState<GameState | null>(null);
+  const [currentState, setCurrentState] = useState<GameState | null>(null);
+  const [lastStateTimestamp, setLastStateTimestamp] = useState(0);
+  const animationFrameId = useRef<number | null>(null);
+  const [renderTrigger, setRenderTrigger] = useState(0); // Используется для принудительной перерисовки
+  const previousStateForEffectsRef = useRef<GameState | null>(null);
+
+
+  const [vfx, setVfx] = useState<VFX[]>([]);
+  const [deadPlayerIds, setDeadPlayerIds] = useState<Set<string>>(new Set());
+  const socketRef = useRef<WebSocket | null>(null);
+
+  const latestDirectionInputRef = useRef<Direction | null>(null);
+  const lastSentDirectionRef = useRef<Direction | null>(null);
+  const myCurrentDirectionRef = useRef<Direction | null>(null);
+
+  const sendWsMessage = (message: object) => {
+    if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
+      socketRef.current.send(JSON.stringify(message));
+    }
+  };
+
+  const handleUsePowerUp = (slot: number) => {
+    sendWsMessage({ action: 'use_powerup', slot });
+  };
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (document.activeElement?.tagName === 'INPUT') return;
+      const code = e.code;
+      let direction: Direction | null = null;
+      switch (code) {
+        case 'ArrowUp': case 'KeyW': direction = 'up'; break;
+        case 'ArrowDown': case 'KeyS': direction = 'down'; break;
+        case 'ArrowLeft': case 'KeyA': direction = 'left'; break;
+        case 'ArrowRight': case 'KeyD': direction = 'right'; break;
+      }
+
+      if (direction) {
+        e.preventDefault();
+        latestDirectionInputRef.current = direction;
+        return;
+      }
+
+      switch (code) {
+        case 'Digit1': e.preventDefault(); handleUsePowerUp(0); break;
+        case 'Digit2': e.preventDefault(); handleUsePowerUp(1); break;
+        case 'Digit3': e.preventDefault(); handleUsePowerUp(2); break;
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);

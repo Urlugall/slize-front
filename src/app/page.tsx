@@ -2,10 +2,10 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { GameCanvas } from '../components/GameCanvas';
-import { PowerUpBar } from '../components/PowerUpBar'; // Assuming this is correct
-import type { GameState, ServerMessage } from './types';
-import { soundManager } from '../lib/SoundManager';
+import { GameCanvas } from '@/features/game/components/GameCanvas';
+import { PowerUpBar } from '@/features/game/components/PowerUpBar';
+import type { GameState, ServerMessage } from '@/features/game/types';
+import { soundManager } from '@/features/game/lib/SoundManager';
 
 type ConnectionStatus =
   | 'disconnected' | 'authenticating'
@@ -49,13 +49,15 @@ export default function HomePage() {
   const [currentState, setCurrentState] = useState<GameState | null>(null);
   const [lastStateTimestamp, setLastStateTimestamp] = useState(0);
   const animationFrameId = useRef<number | null>(null);
-  const [renderTrigger, setRenderTrigger] = useState(0); // Используется для принудительной перерисовки
   const previousStateForEffectsRef = useRef<GameState | null>(null);
 
 
   const [vfx, setVfx] = useState<VFX[]>([]);
   const [deadPlayerIds, setDeadPlayerIds] = useState<Set<string>>(new Set());
   const socketRef = useRef<WebSocket | null>(null);
+  const connectingRef = useRef<boolean>(false);
+  const lastTurnSentAtRef = useRef<number>(0);
+  const manualDisconnectRef = useRef<boolean>(false);
 
   const latestDirectionInputRef = useRef<Direction | null>(null);
   const lastSentDirectionRef = useRef<Direction | null>(null);
@@ -105,44 +107,15 @@ export default function HomePage() {
     // Логика отправки инпута
     const latestInput = latestDirectionInputRef.current;
     const actualDirection = myCurrentDirectionRef.current;
-    if (latestInput && actualDirection && latestInput !== lastSentDirectionRef.current && !isOpposite(actualDirection, latestInput)) {
-      sendWsMessage({ action: 'turn', direction: latestInput });
-      lastSentDirectionRef.current = latestInput;
-
-      // --- ПРЕДУГАДЫВАНИЕ ---
-      // Сразу применяем поворот к локальному состоянию, не дожидаясь ответа сервера.
-      // Это сделает управление мгновенно отзывчивым.
-      setCurrentState(prev => {
-        if (!prev || !playerId) return prev;
-        const mySnake = prev.snakes.find(s => s.id === playerId);
-        if (!mySnake) return prev;
-
-        // Эта логика должна симулировать 1 шаг движения.
-        // Для простоты, мы просто "поворачиваем" голову,
-        // а сервер потом пришлет корректное полное состояние.
-        // В более сложных системах тут была бы полная симуляция движения.
-        const newHead = { ...mySnake.body[0] };
-        switch (latestInput) {
-          case 'up': newHead.y--; break;
-          case 'down': newHead.y++; break;
-          case 'left': newHead.x--; break;
-          case 'right': newHead.x++; break;
-        }
-
-        const newBody = [newHead, ...mySnake.body.slice(0, -1)];
-
-        return {
-          ...prev,
-          snakes: prev.snakes.map(s => s.id === playerId ? { ...s, body: newBody } : s)
-        };
-      });
-      // Обновляем текущее направление для дальнейших проверок
-      myCurrentDirectionRef.current = latestInput;
+    if (latestInput && actualDirection && latestInput !== actualDirection && !isOpposite(actualDirection, latestInput)) {
+      const now = performance.now();
+      if (now - lastTurnSentAtRef.current > 40) {
+        sendWsMessage({ action: 'turn', direction: latestInput });
+        lastTurnSentAtRef.current = now;
+      }
     }
 
     // Очистка старых VFX и запуск нового кадра
-    setVfx(prev => prev.filter(effect => Date.now() - effect.createdAt < effect.duration));
-    setRenderTrigger(performance.now()); // Триггер для canvas
     animationFrameId.current = requestAnimationFrame(gameLoop);
   }, []); // Зависимости убраны для стабильности
 
@@ -213,8 +186,12 @@ export default function HomePage() {
   }, []);
 
   const handleConnect = async () => {
+    if (connectingRef.current) return;
+    connectingRef.current = true;
+    manualDisconnectRef.current = false;
     if (nickname.trim().length < 3) {
       setError("Nickname must be at least 3 characters.");
+      connectingRef.current = false;
       return;
     }
     setError(null);
@@ -225,29 +202,42 @@ export default function HomePage() {
     setStatus('authenticating');
 
     try {
+      // Close any existing socket before establishing a new one
+      if (socketRef.current) {
+        try { socketRef.current.close(1000, 'Reconnecting'); } catch {}
+        socketRef.current = null;
+      }
       const authResponse = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/auth`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ clientKey: process.env.NEXT_PUBLIC_CLIENT_SECRET }),
       });
       if (!authResponse.ok) throw new Error('Authentication failed. Check client secret.');
-      const { token, playerId: newPlayerId } = await authResponse.json();
+      const { token: authToken, playerId: newPlayerId } = await authResponse.json();
       setPlayerId(newPlayerId);
+      setToken(authToken);
+      try {
+        localStorage.setItem('slize_token', authToken);
+        localStorage.setItem('slize_playerId', newPlayerId);
+        localStorage.setItem('slize_nickname', nickname);
+      } catch {}
 
       setStatus('finding_lobby');
       const lobbyResponse = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/lobbies/find-best`, {
-        headers: { 'Authorization': `Bearer ${token}` },
+        headers: { 'Authorization': `Bearer ${authToken}` },
       });
       if (!lobbyResponse.ok) throw new Error('Could not find a lobby.');
       const { lobbyId } = await lobbyResponse.json();
 
       setStatus('connecting');
-      const wsUrl = `${process.env.NEXT_PUBLIC_WS_URL}/lobbies/${lobbyId}/ws?token=${token}&nickname=${encodeURIComponent(nickname)}`;
+      const wsUrl = `${process.env.NEXT_PUBLIC_WS_URL}/lobbies/${lobbyId}/ws?token=${authToken}&nickname=${encodeURIComponent(nickname)}`;
       const socket = new WebSocket(wsUrl);
       socketRef.current = socket;
 
       socket.onopen = () => {
         setStatus('connected');
+        connectingRef.current = false;
+        manualDisconnectRef.current = false;
         soundManager.play('connect');
 
         // ВАЖНО: корректно закрываем WS при уходе/перезагрузке,
@@ -257,9 +247,17 @@ export default function HomePage() {
         window.addEventListener('beforeunload', onUnload);
 
         // снять подписки при закрытии
-        socket.onclose = () => {
+        socket.onclose = (ev) => {
           window.removeEventListener('pagehide', onUnload);
           window.removeEventListener('beforeunload', onUnload);
+          if (manualDisconnectRef.current) {
+            manualDisconnectRef.current = false;
+            return;
+          }
+          if (ev.code === 4000) {
+            // server replaced this connection with a fresher one; ignore quietly
+            return;
+          }
           setStatus('disconnected');
         };
       };
@@ -280,7 +278,7 @@ export default function HomePage() {
               previousStateForEffectsRef.current = prev; // Also update ref for sound/VFX
               return message.payload; // Новое состояние становится текущим
             });
-            setLastStateTimestamp(Date.now()); // Запоминаем время получения
+            setLastStateTimestamp(performance.now()); // Запоминаем время получения
             break;
           case 'player_died':
             soundManager.play('death');
@@ -304,17 +302,26 @@ export default function HomePage() {
         }
       };
 
-      socket.onclose = () => setStatus('disconnected');
-      socket.onerror = () => { setError('Connection error.'); setStatus('disconnected'); };
+      
+      // onclose is assigned in onopen to ensure cleanup of listeners
+      socket.onerror = (e) => {
+        if (manualDisconnectRef.current) return;
+        setError('Connection error.');
+        setStatus('disconnected');
+        connectingRef.current = false;
+        if (typeof console !== 'undefined') console.warn('WS error', e);
+      };
 
     } catch (err) {
       setError(err instanceof Error ? err.message : 'An unknown error occurred');
       setStatus('disconnected');
       if (socketRef.current) socketRef.current.close();
+      connectingRef.current = false;
     }
   };
 
   const handleDisconnect = () => {
+    manualDisconnectRef.current = true;
     if (socketRef.current) {
       socketRef.current.close(1000, 'User initiated disconnect');
     }
@@ -360,13 +367,11 @@ export default function HomePage() {
           </div>
           <div className="order-3 xl:order-2 flex-shrink-0 flex justify-center w-full">
             <GameCanvas
-              // --- ИЗМЕНЕНИЕ: Возвращаем пропсы для интерполяции ---
               previousState={previousState}
               currentState={currentState}
               lastStateTimestamp={lastStateTimestamp}
               playerId={playerId}
               deadPlayerIds={deadPlayerIds}
-              renderTrigger={renderTrigger} // Важно для перерисовки
               vfx={vfx}
             />
           </div>
@@ -406,3 +411,10 @@ export default function HomePage() {
     </main>
   );
 }
+
+
+
+
+
+
+
