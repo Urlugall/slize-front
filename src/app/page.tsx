@@ -1,4 +1,4 @@
-// src/app/page.tsx
+﻿// src/app/page.tsx
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from 'react';
@@ -62,6 +62,9 @@ export default function HomePage() {
   const latestDirectionInputRef = useRef<Direction | null>(null);
   const lastSentDirectionRef = useRef<Direction | null>(null);
   const myCurrentDirectionRef = useRef<Direction | null>(null);
+
+  const closingRef = useRef(false);      // мы инициировали закрытие
+  const unloadingRef = useRef(false);    // страница уходит
 
   const sendWsMessage = (message: object) => {
     if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
@@ -189,6 +192,9 @@ export default function HomePage() {
     if (connectingRef.current) return;
     connectingRef.current = true;
     manualDisconnectRef.current = false;
+    closingRef.current = false;
+    unloadingRef.current = false;
+
     if (nickname.trim().length < 3) {
       setError("Nickname must be at least 3 characters.");
       connectingRef.current = false;
@@ -204,7 +210,7 @@ export default function HomePage() {
     try {
       // Close any existing socket before establishing a new one
       if (socketRef.current) {
-        try { socketRef.current.close(1000, 'Reconnecting'); } catch {}
+        try { socketRef.current.close(1000, 'Reconnecting'); } catch { }
         socketRef.current = null;
       }
       const authResponse = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/auth`, {
@@ -220,7 +226,7 @@ export default function HomePage() {
         localStorage.setItem('slize_token', authToken);
         localStorage.setItem('slize_playerId', newPlayerId);
         localStorage.setItem('slize_nickname', nickname);
-      } catch {}
+      } catch { }
 
       setStatus('finding_lobby');
       const lobbyResponse = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/lobbies/find-best`, {
@@ -234,36 +240,24 @@ export default function HomePage() {
       const socket = new WebSocket(wsUrl);
       socketRef.current = socket;
 
+      // аккуратно закрывать при уходе
+      const onUnload = () => {
+        unloadingRef.current = true;
+        closingRef.current = true;
+        try { socket.close(1001, 'Page unloading'); } catch { }
+      };
+      window.addEventListener('pagehide', onUnload);
+      window.addEventListener('beforeunload', onUnload);
+
       socket.onopen = () => {
         setStatus('connected');
         connectingRef.current = false;
         manualDisconnectRef.current = false;
         soundManager.play('connect');
-
-        // ВАЖНО: корректно закрываем WS при уходе/перезагрузке,
-        // чтобы DO сразу получил close и не держал "зомби".
-        const onUnload = () => socket.close(1000, 'Page unloading');
-        window.addEventListener('pagehide', onUnload);   // мобильные/Safari
-        window.addEventListener('beforeunload', onUnload);
-
-        // снять подписки при закрытии
-        socket.onclose = (ev) => {
-          window.removeEventListener('pagehide', onUnload);
-          window.removeEventListener('beforeunload', onUnload);
-          if (manualDisconnectRef.current) {
-            manualDisconnectRef.current = false;
-            return;
-          }
-          if (ev.code === 4000) {
-            // server replaced this connection with a fresher one; ignore quietly
-            return;
-          }
-          setStatus('disconnected');
-        };
       };
 
       socket.onmessage = (event) => {
-        if (event.data === 'ping') {
+        if (event.data === 'ping' && socketRef.current?.readyState === WebSocket.OPEN) {
           socketRef.current?.send('pong');
           return;
         }
@@ -302,10 +296,24 @@ export default function HomePage() {
         }
       };
 
-      
-      // onclose is assigned in onopen to ensure cleanup of listeners
+      socket.onclose = (ev) => {
+        window.removeEventListener('pagehide', onUnload);
+        window.removeEventListener('beforeunload', onUnload);
+        socketRef.current = null;
+        connectingRef.current = false;
+
+        // игнорируем «нормальные» закрытия
+        if (manualDisconnectRef.current || closingRef.current || unloadingRef.current) {
+          manualDisconnectRef.current = false;
+          return;
+        }
+        if (ev.code === 4000) return; // «replaced by fresher one»
+
+        setStatus('disconnected');
+      };
+
       socket.onerror = (e) => {
-        if (manualDisconnectRef.current) return;
+        if (manualDisconnectRef.current || closingRef.current || unloadingRef.current) return;
         setError('Connection error.');
         setStatus('disconnected');
         connectingRef.current = false;
@@ -313,21 +321,23 @@ export default function HomePage() {
       };
 
     } catch (err) {
+      closingRef.current = true;
+      if (socketRef.current) { try { socketRef.current.close(1000, 'Abort connect'); } catch { } }
       setError(err instanceof Error ? err.message : 'An unknown error occurred');
       setStatus('disconnected');
-      if (socketRef.current) socketRef.current.close();
       connectingRef.current = false;
     }
   };
 
   const handleDisconnect = () => {
     manualDisconnectRef.current = true;
+    closingRef.current = true;
     if (socketRef.current) {
-      socketRef.current.close(1000, 'User initiated disconnect');
+      try { socketRef.current.close(1001, 'User initiated disconnect'); } catch { }
     }
     setStatus('disconnected');
     setError(null);
-    // Сброс состояний
+    // сброс локальных состояний...
     setCurrentState(null);
     setPreviousState(null);
     previousStateForEffectsRef.current = null;
@@ -343,7 +353,9 @@ export default function HomePage() {
   return (
     <main className="flex flex-col items-center justify-start min-h-screen p-4 md:p-8">
       {/* ... (заголовок без изменений) ... */}
-      <h1 className={`font-extrabold mb-12 bg-clip-text text-transparent bg-gradient-to-r from-teal-500 to-blue-600 tracking-tighter ${status === 'connected' ? 'text-3xl mt-4 hidden xl:block' : 'text-5xl md:text-6xl mt-8'}`}>
+      <h1
+        className={`font-extrabold mb-12 bg-clip-text text-transparent bg-gradient-to-r from-teal-500 to-sky-600 tracking-tighter ${status === 'connected' ? 'text-3xl mt-4 hidden xl:block' : 'text-5xl md:text-6xl mt-8'}`}
+      >
         Slize - Multiplayer Snake Game 🐍
       </h1>
       {status !== 'connected' ? (
