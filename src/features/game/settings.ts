@@ -2,12 +2,14 @@
 // Концентрируем все параметры симуляции и отрисовки
 
 export const SERVER_TICK_RATE = 150;      // мс между серверными снапшотами
-export const BASE_GRID_SIZE = 30;         // базовый размер сетки (клеток)
+export const BASE_GRID_SIZE = 32;         // базовый размер сетки (клеток)
 export const BASE_CELL_SIZE = 20;         // базовый пиксельный размер клетки при BASE_GRID_SIZE
 export const VISUAL_SCALE_FACTOR = 0.4;   // скейл полотна при отличии gridSize от BASE_GRID_SIZE
 
 // Canvas переходы/анимации
 export const GRID_TRANSITION_MS = 420;
+
+export const ROUND_DURATION_MS = 3 * 60 * 1000;
 
 // Снаряды/эффекты (используются в рендере)
 export const PROJECTILE_SPAWN_LEAD = 0.6;   // старт «впереди головы» в клетках

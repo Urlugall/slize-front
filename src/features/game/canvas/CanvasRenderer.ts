@@ -1,7 +1,7 @@
 // src/features/game/canvas/CanvasRenderer.ts
 // Светлый канвас: мягкие сетки, скруглённые сегменты, поверапы в едином стиле.
 
-import type { GameState, PowerUpType } from '@/features/game/types';
+import type { GameOverInfo, GameState, PowerUpType } from '@/features/game/types';
 import {
     BASE_CELL_SIZE, BASE_GRID_SIZE, VISUAL_SCALE_FACTOR,
     SERVER_TICK_RATE, GRID_TRANSITION_MS,
@@ -33,6 +33,7 @@ export class CanvasRenderer {
     private playerId: string | null = null;
     private deadIds: Set<string> = new Set();
     private vfx: VFX[] = [];
+    private gameOver: GameOverInfo | null | undefined = null;
 
     private dpr = 1;
     private lastGridSize: number | null = null;
@@ -52,6 +53,7 @@ export class CanvasRenderer {
     setPlayerId(id: string | null) { this.playerId = id; }
     setDeadIds(ids: Set<string>) { this.deadIds = ids; }
     setVfx(list: VFX[]) { this.vfx = list; }
+    setGameOver(info: GameOverInfo | null | undefined) { this.gameOver = info; }
 
     draw(now: number) {
         if (!this.curr) return;
@@ -76,6 +78,10 @@ export class CanvasRenderer {
         this.drawVfx(ctx, m);
         this.drawResizeBanner(ctx, m);
         this.postFx(ctx, m);
+
+        if (this.gameOver) {
+            this.drawGameOverBanner(ctx, m, now, this.gameOver);
+        }
     }
 
     // --- Canvas / Metrics ---
@@ -461,6 +467,54 @@ export class CanvasRenderer {
             ctx.fillRect(0, 0, m.canvasSize, m.canvasSize);
             ctx.restore();
         }
+    }
+
+    private drawGameOverBanner(ctx: CanvasRenderingContext2D, m: Metrics, now: number, info: GameOverInfo) {
+        ctx.save();
+
+        const realNow = Date.now();
+        const remain = Math.max(0, info.resetAt - realNow);
+        const seconds = Math.floor(remain / 1000);
+        const secondsStr = seconds.toString().padStart(2, '0');
+
+        ctx.fillStyle = 'rgba(247, 250, 252, 0.85)';
+        ctx.fillRect(0, 0, m.canvasSize, m.canvasSize);
+
+        // 2. Центральный блок
+        const boxW = m.canvasSize * 0.75, boxH = m.canvasSize * 0.40;
+        const boxX = (m.canvasSize - boxW) / 2, boxY = (m.canvasSize - boxH) / 2;
+
+        ctx.shadowColor = 'rgba(2, 6, 23, 0.08)';
+        ctx.shadowBlur = 20;
+        ctx.fillStyle = '#FFFFFF';
+        this.roundRect(ctx, boxX, boxY, boxW, boxH, 16);
+        ctx.fill();
+        ctx.shadowBlur = 0;
+
+        // Тексты
+        const titleY = boxY + boxH * 0.25;
+        ctx.fillStyle = SNAKE_COLORS.me;
+        ctx.font = `700 ${Math.max(24, m.canvasSize * 0.04)}px system-ui`;
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText('ROUND WINNER', m.canvasSize / 2, titleY);
+
+        const nicknameY = titleY + Math.max(8, m.canvasSize * 0.05);
+        ctx.fillStyle = '#0F172A';
+        ctx.font = `700 ${Math.max(36, m.canvasSize * 0.07)}px system-ui`;
+        ctx.fillText(info.winnerNickname, m.canvasSize / 2, nicknameY);
+
+        const winnerScore = this.curr!.players[info.winnerId]?.score ?? 'N/A';
+        const scoreY = nicknameY + Math.max(6, m.canvasSize * 0.04);
+        ctx.fillStyle = '#0EA5A6';
+        ctx.font = `700 ${Math.max(24, m.canvasSize * 0.04)}px system-ui`;
+        ctx.fillText(`Score: ${winnerScore}`, m.canvasSize / 2, scoreY);
+
+        const timerY = boxY + boxH * 0.85;
+        ctx.fillStyle = seconds === 0 ? BLOCK_COLORS.kill : 'rgba(15, 23, 42, 0.6)'; // (было '#52525B')
+        ctx.font = `600 ${Math.max(18, m.canvasSize * 0.03)}px system-ui`;
+        ctx.fillText(`Restarting in ${secondsStr} seconds...`, m.canvasSize / 2, timerY);
+
+        ctx.restore();
     }
 
     private ensureNoisePattern(): CanvasPattern | null {

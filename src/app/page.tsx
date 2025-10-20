@@ -179,31 +179,52 @@ export default function HomePage() {
           socketRef.current?.send('pong');
           return;
         }
-        const message: ServerMessage = JSON.parse(event.data);
+
+        const message = parseWsMessage(event.data);
+        if (!message) {
+          // Не валимся на мусорных/бинарных/случайных фреймах
+          console.warn('WS non-JSON or unknown message ignored');
+          return;
+        }
+
         switch (message.type) {
-          case 'state':
+          case 'state': {
+            const nextState = message.payload; // GameState
             setCurrentState(prev => {
               setPreviousState(prev);
               previousStateForEffectsRef.current = prev;
-              if (message.payload.gameOver) setGameOverInfo(message.payload.gameOver);
-              return message.payload;
+              if (nextState.gameOver) setGameOverInfo(nextState.gameOver);
+              return nextState;
             });
             setLastStateTimestamp(performance.now());
             break;
+          }
           case 'game_over':
             setGameOverInfo(message.payload);
             soundManager.play('death');
             break;
           case 'player_died':
             soundManager.play('death');
-            const deadSnake = (previousStateForEffectsRef.current || currentState)?.snakes.find(s => s.id === message.payload.playerId);
+            const prevForFx = previousStateForEffectsRef.current || currentState;
+            const deadSnake = prevForFx?.snakes.find(s => s.id === message.payload.playerId);
             if (deadSnake?.body.length) {
               const head = deadSnake.body[0];
-              setVfx(prev => [...prev, { id: Date.now(), type: 'explosion', x: head.x, y: head.y, createdAt: Date.now(), duration: 400 }]);
+              setVfx(prev => [
+                ...prev,
+                { id: Date.now(), type: 'explosion', x: head.x, y: head.y, createdAt: Date.now(), duration: 400 },
+              ]);
             }
-            setDeadPlayerIds(prev => new Set(prev).add(message.payload.playerId));
+            setDeadPlayerIds(prev => {
+              const next = new Set(prev);
+              next.add(message.payload.playerId);
+              return next;
+            });
             setTimeout(() => {
-              setDeadPlayerIds(prev => { const next = new Set(prev); next.delete(message.payload.playerId); return next; });
+              setDeadPlayerIds(prev => {
+                const next = new Set(prev);
+                next.delete(message.payload.playerId);
+                return next;
+              });
             }, 500);
             break;
         }
@@ -403,6 +424,7 @@ export default function HomePage() {
       window.addEventListener('beforeunload', onBeforeUnload);
 
       socket.onopen = () => {
+        if (reconnectTimerRef.current) { clearTimeout(reconnectTimerRef.current); reconnectTimerRef.current = null; }
         setStatus('connected');
         connectingRef.current = false;
         manualDisconnectRef.current = false;
@@ -425,7 +447,6 @@ export default function HomePage() {
 
         switch (message.type) {
           case 'state':
-            // --- ИЗМЕНЕНИЕ: Правильно обновляем оба состояния ---
             setCurrentState(prev => {
               setPreviousState(prev); // Текущее становится предыдущим
               previousStateForEffectsRef.current = prev; // Also update ref for sound/VFX

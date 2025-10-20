@@ -5,8 +5,13 @@
 // Держит только рефы и жизненный цикл. Вся отрисовка — в CanvasRenderer.
 
 import { useEffect, useRef } from 'react';
-import type { GameState } from '@/features/game/types';
+import type { GameState, GameOverInfo } from '@/features/game/types';
 import { CanvasRenderer, type VFX } from '@/features/game/canvas/CanvasRenderer';
+import {
+  BASE_GRID_SIZE,
+  BASE_CELL_SIZE,
+  VISUAL_SCALE_FACTOR,
+} from '@/features/game/settings';
 
 interface GameCanvasProps {
   previousState: GameState | null;
@@ -15,6 +20,7 @@ interface GameCanvasProps {
   playerId: string | null;
   deadPlayerIds: Set<string>;
   vfx: VFX[];
+  gameOver: GameOverInfo | null | undefined;
 }
 
 export function GameCanvas({
@@ -24,6 +30,7 @@ export function GameCanvas({
   playerId,
   deadPlayerIds,
   vfx,
+  gameOver,
 }: GameCanvasProps) {
   const wrapperRef = useRef<HTMLDivElement>(null);
   const staticCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -65,16 +72,12 @@ export function GameCanvas({
   useEffect(() => { rendererRef.current?.setPlayerId(playerId); }, [playerId]);
   useEffect(() => { rendererRef.current?.setDeadIds(deadPlayerIds); }, [deadPlayerIds]);
   useEffect(() => { rendererRef.current?.setVfx(vfx); }, [vfx]);
+  useEffect(() => { rendererRef.current?.setGameOver(gameOver); }, [gameOver]);
 
   // Вычисляем CSS-размер по текущему gridSize (как раньше)
   const gridSizeForLayout = currentState?.gridSize ?? previousState?.gridSize ?? null;
   const cssSize = (() => {
     if (!gridSizeForLayout || gridSizeForLayout <= 0) return 0;
-    // Дублируем формулу из CanvasRenderer.resolveMetrics,
-    // чтобы контейнер имел корректный CSS размер без доступа внутрь класса.
-    const BASE_GRID_SIZE = 30;
-    const BASE_CELL_SIZE = 20;
-    const VISUAL_SCALE_FACTOR = 0.4;
     const canvasSize =
       BASE_CELL_SIZE * (BASE_GRID_SIZE + VISUAL_SCALE_FACTOR * (gridSizeForLayout - BASE_GRID_SIZE));
     return canvasSize;
@@ -84,7 +87,7 @@ export function GameCanvas({
     <div
       ref={wrapperRef}
       style={{ position: 'relative', width: cssSize, height: cssSize, overflow: 'hidden' }}
-      className="box-content rounded-xl shadow-xl border-4 border-gray-300"
+      className="box-content rounded-xl shadow-lg border border-[rgba(15,23,42,0.08)] bg-white"
     >
       <canvas ref={staticCanvasRef} style={{ position: 'absolute', inset: 0 }} />
       <canvas ref={dynamicCanvasRef} style={{ position: 'absolute', inset: 0 }} />

@@ -3,6 +3,13 @@
 // --- Power-Ups ---
 export type PowerUpType = 'SpeedBoost' | 'ScoreBoost' | 'Projectile' | 'Ghost' | 'Reverse' | 'Swap';
 
+// --- Game Over Info ---
+export interface GameOverInfo {
+  winnerId: string;
+  winnerNickname: string;
+  resetAt: number; // UNIX timestamp
+}
+
 export interface PowerUp {
   id: string;
   type: PowerUpType;
@@ -59,7 +66,7 @@ export interface GameState {
   players: Record<string, PlayerInfo>;
   powerUps: PowerUp[];
   projectiles: ProjectileState[];
-  gameOver?: string;
+  gameOver?: GameOverInfo | null;
   blocks?: BlockCell[];
   pendingResize?: PendingResize;
 }
@@ -69,4 +76,5 @@ export type ServerMessage =
   | { type: 'state'; payload: GameState }
   | { type: 'player_joined'; payload: { playerId: string; nickname: string } }
   | { type: 'player_left'; payload: { playerId: string } }
-  | { type: 'player_died'; payload: { playerId: string } };
+  | { type: 'player_died'; payload: { playerId: string } }
+  | { type: 'game_over'; payload: GameOverInfo };
