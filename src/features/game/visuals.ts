@@ -15,6 +15,10 @@ export const FOOD_COLOR = '#F59E0B'; // amber-500 (сохраняем читае
 export const SNAKE_COLORS = {
     me: '#2DD4BF',
     other: '#818CF8',
+
+    teamAlpha: '#F43F5E', // Rose-500
+    teamBravo: '#3B82F6', // Blue-500
+
     dead: '#94A3B8',      // slate-400 (норм)
     nickname: '#0F172A',  // тёмный ник на светлом фоне
     eyes: '#0F172A',      // тёмные глаза (контрастно на светлом)

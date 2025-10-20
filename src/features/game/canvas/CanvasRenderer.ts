@@ -288,9 +288,22 @@ export class CanvasRenderer {
             const isGhost = info?.activeEffects.isGhostUntil > Date.now();
             const isDead = this.deadIds.has(s.id);
             const hasSpeed = info?.activeEffects.speedBoostUntil > Date.now();
+            const teamId = info?.teamId;
 
-            const baseOpacity = isDead ? 0.45 : isGhost ? 0.40 : 0.98;
-            const baseColor = isDead ? SNAKE_COLORS.dead : isMe ? SNAKE_COLORS.me : SNAKE_COLORS.other;
+            let baseColor: string;
+
+            if (isDead) {
+                baseColor = SNAKE_COLORS.dead;
+            } else if (teamId) {
+                // В командном режиме цвет определяется командой
+                baseColor = teamId === 'alpha' ? SNAKE_COLORS.teamAlpha : SNAKE_COLORS.teamBravo;
+            } else {
+                // В FFA режиме цвет определяется 'me' или 'other'
+                baseColor = isMe ? SNAKE_COLORS.me : SNAKE_COLORS.other;
+            }
+
+            // "Я" всегда чуть ярче и непрозрачнее (если не призрак/мертв)
+            const baseOpacity = isDead ? 0.45 : isGhost ? 0.40 : (isMe ? 1.0 : 0.95);
 
             const rc = (hex: string, off: number) => parseInt(hex.slice(1 + off, 3 + off), 16);
             const rgba = `rgba(${rc(baseColor, 0)}, ${rc(baseColor, 2)}, ${rc(baseColor, 4)}, ${baseOpacity})`;

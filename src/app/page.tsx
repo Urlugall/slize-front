@@ -4,7 +4,8 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { GameCanvas } from '@/features/game/components/GameCanvas';
 import { PowerUpBar } from '@/features/game/components/PowerUpBar';
-import type { GameOverInfo, GameState, ServerMessage } from '@/features/game/types';
+import type { GameOverInfo, GameState, ServerMessage, GameModeKey, TeamId } from '@/features/game/types';
+import { TeamPanel } from '@/features/game/components/TeamPanel';
 import { soundManager } from '@/features/game/lib/SoundManager';
 import { SERVER_TICK_RATE, ROUND_DURATION_MS } from '@/features/game/settings';
 
@@ -13,6 +14,8 @@ type ConnectionStatus =
   | 'finding_lobby' | 'connecting' | 'connected';
 
 type Direction = 'up' | 'down' | 'left' | 'right';
+
+const LOCK_KEY = 'slize_active_tab_lock';
 
 const isServerMessage = (data: unknown): data is ServerMessage => {
   if (!data || typeof data !== 'object') return false;
@@ -35,6 +38,13 @@ const isServerMessage = (data: unknown): data is ServerMessage => {
         && typeof (maybe.payload as { winnerId?: unknown }).winnerId === 'string'
         && typeof (maybe.payload as { winnerNickname?: unknown }).winnerNickname === 'string'
         && typeof (maybe.payload as { resetAt?: unknown }).resetAt === 'number';
+    case 'team_switched':
+      return !!maybe.payload
+        && typeof (maybe.payload as { playerId?: unknown }).playerId === 'string'
+        && typeof (maybe.payload as { teamId?: unknown }).teamId === 'string';
+    case 'team_switch_denied':
+      return !!maybe.payload
+        && typeof (maybe.payload as { reason?: unknown }).reason === 'string';
     default:
       return false;
   }
@@ -80,6 +90,10 @@ export default function HomePage() {
   const [playerId, setPlayerId] = useState<string | null>(null);
   const [status, setStatus] = useState<ConnectionStatus>('disconnected');
   const [error, setError] = useState<string | null>(null);
+  const [mode, setMode] = useState<GameModeKey>('free_for_all');
+
+  const [isLocked, setIsLocked] = useState(false); // Заблокирована ли вкладка
+  const lockIdRef = useRef<string | null>(null);
 
   const [previousState, setPreviousState] = useState<GameState | null>(null);
   const [currentState, setCurrentState] = useState<GameState | null>(null);
@@ -115,6 +129,10 @@ export default function HomePage() {
     sendWsMessage({ action: 'use_powerup', slot });
   };
 
+  const handleSwitchTeam = (teamId: TeamId) => {
+    sendWsMessage({ action: 'switch_team', teamId });
+  };
+
   // --- Reconnect logic ---
   const scheduleReconnect = useCallback(() => {
     // Не реконнектимся, если пользователь сам отключился или страница уходит
@@ -141,7 +159,7 @@ export default function HomePage() {
         scheduleReconnect();
       }
     }, delayMs) as unknown as number;
-  }, [token, playerId, nickname]);
+  }, [token, playerId, nickname, mode]);
 
   const reconnectToLobby = useCallback(async () => {
     if (connectingRef.current) return;
@@ -152,7 +170,7 @@ export default function HomePage() {
       // Если у нас нет актуального lobbyId, попросим бек (он подберёт лучший / тот же)
       let lobbyId = lastLobbyIdRef.current;
       if (!lobbyId) {
-        const lobbyResponse = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/lobbies/find-best`, {
+        const lobbyResponse = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/lobbies/find-best?mode=${mode}`, {
           headers: { 'Authorization': `Bearer ${sessionStorage.getItem('slize_token')}` },
         });
         if (!lobbyResponse.ok) throw new Error('Could not find a lobby.');
@@ -162,7 +180,7 @@ export default function HomePage() {
       }
       const authToken = token ?? sessionStorage.getItem('slize_token');
       const nick = nickname;
-      const wsUrl = `${process.env.NEXT_PUBLIC_WS_URL}/lobbies/${lobbyId}/ws?token=${authToken}&nickname=${encodeURIComponent(nick)}`;
+      const wsUrl = `${process.env.NEXT_PUBLIC_WS_URL}/lobbies/${lobbyId}/ws?token=${authToken}&nickname=${encodeURIComponent(nick)}&mode=${mode}`;
       const socket = new WebSocket(wsUrl);
       socketRef.current = socket;
       // остальная установка обработчиков — такая же, как в handleConnect (onopen/onmessage/onclose/onerror)
@@ -227,6 +245,13 @@ export default function HomePage() {
               });
             }, 500);
             break;
+          case 'team_switched':
+            soundManager.play('connect'); // Звук подтверждения
+            break;
+          case 'team_switch_denied':
+            setError('Cannot switch team right now.'); // Показываем временную ошибку
+            setTimeout(() => setError(null), 2000);
+            break;
         }
       };
       socket.onclose = (ev) => {
@@ -249,7 +274,60 @@ export default function HomePage() {
       connectingRef.current = false;
       throw e;
     }
-  }, [nickname, currentState, scheduleReconnect]);
+  }, [nickname, currentState, scheduleReconnect, mode, token]);
+
+  useEffect(() => { lastLobbyIdRef.current = null; }, [mode]);
+
+  useEffect(() => {
+    // 1. Генерируем ID для этой вкладки при загрузке
+    if (!lockIdRef.current) {
+      lockIdRef.current = crypto.randomUUID();
+    }
+
+    // 2. Слушаем изменения в localStorage
+    const handleStorageChange = (e: StorageEvent) => {
+      if (e.key === LOCK_KEY) {
+        const lockValue = e.newValue;
+        if (lockValue && lockValue !== lockIdRef.current) {
+          // Другая вкладка захватила лок
+          setIsLocked(true);
+          setError("Game is active in another tab. Only one tab is allowed.");
+          // Если мы были подключены, принудительно отключаемся
+          if (socketRef.current) {
+            handleDisconnect();
+          }
+        } else if (!lockValue) {
+          // Лок был снят, можно подключаться
+          setIsLocked(false);
+          setError(null); // Стираем ошибку о другой вкладке
+        }
+      }
+    };
+
+    // 3. Снимаем лок при закрытии вкладки (только если мы его держим)
+    const releaseLockOnUnload = () => {
+      if (localStorage.getItem(LOCK_KEY) === lockIdRef.current) {
+        localStorage.removeItem(LOCK_KEY);
+      }
+    };
+
+    window.addEventListener('storage', handleStorageChange);
+    window.addEventListener('beforeunload', releaseLockOnUnload);
+
+    // 4. Проверяем лок при загрузке страницы
+    const currentLock = localStorage.getItem(LOCK_KEY);
+    if (currentLock && currentLock !== lockIdRef.current) {
+      setIsLocked(true);
+      setError("Game is active in another tab. Only one tab is allowed.");
+    } else {
+      setIsLocked(false);
+    }
+
+    return () => {
+      window.removeEventListener('storage', handleStorageChange);
+      window.removeEventListener('beforeunload', releaseLockOnUnload);
+    };
+  }, []);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -285,7 +363,7 @@ export default function HomePage() {
     const actualDirection = myCurrentDirectionRef.current;
     if (latestInput && actualDirection && latestInput !== actualDirection && !isOpposite(actualDirection, latestInput)) {
       const now = performance.now();
-      if (now - lastTurnSentAtRef.current > 40) {
+      if (now - lastTurnSentAtRef.current > 60) {
         sendWsMessage({ action: 'turn', direction: latestInput });
         lastTurnSentAtRef.current = now;
       }
@@ -362,6 +440,15 @@ export default function HomePage() {
 
   const handleConnect = async () => {
     if (connectingRef.current) return;
+
+    const currentLock = localStorage.getItem(LOCK_KEY);
+    if (currentLock && currentLock !== lockIdRef.current) {
+      setIsLocked(true);
+      setError("Game is active in another tab. Only one tab is allowed.");
+      connectingRef.current = false;
+      return;
+    }
+
     connectingRef.current = true;
     manualDisconnectRef.current = false;
     closingRef.current = false;
@@ -402,7 +489,7 @@ export default function HomePage() {
       } catch { }
 
       setStatus('finding_lobby');
-      const lobbyResponse = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/lobbies/find-best`, {
+      const lobbyResponse = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/lobbies/find-best?mode=${mode}`, {
         headers: { 'Authorization': `Bearer ${authToken}` },
       });
       if (!lobbyResponse.ok) throw new Error('Could not find a lobby.');
@@ -410,7 +497,10 @@ export default function HomePage() {
       lastLobbyIdRef.current = lobbyId;
 
       setStatus('connecting');
-      const wsUrl = `${process.env.NEXT_PUBLIC_WS_URL}/lobbies/${lobbyId}/ws?token=${authToken}&nickname=${encodeURIComponent(nickname)}`;
+      localStorage.setItem(LOCK_KEY, lockIdRef.current!);
+      setIsLocked(false);
+
+      const wsUrl = `${process.env.NEXT_PUBLIC_WS_URL}/lobbies/${lobbyId}/ws?token=${authToken}&nickname=${encodeURIComponent(nickname)}&mode=${mode}`;
       const socket = new WebSocket(wsUrl);
       socketRef.current = socket;
 
@@ -478,6 +568,13 @@ export default function HomePage() {
               });
             }, 500);
             break;
+          case 'team_switched':
+            soundManager.play('connect');
+            break;
+          case 'team_switch_denied':
+            setError('Cannot switch team.');
+            setTimeout(() => setError(null), 2000);
+            break;
         }
       };
 
@@ -485,6 +582,10 @@ export default function HomePage() {
         window.removeEventListener('beforeunload', onBeforeUnload);
         socketRef.current = null;
         connectingRef.current = false;
+
+        if (localStorage.getItem(LOCK_KEY) === lockIdRef.current) {
+          localStorage.removeItem(LOCK_KEY);
+        }
 
         // игнорируем «нормальные» закрытия
         if (manualDisconnectRef.current || closingRef.current || unloadingRef.current) {
@@ -498,6 +599,10 @@ export default function HomePage() {
       };
 
       socket.onerror = (e) => {
+        if (localStorage.getItem(LOCK_KEY) === lockIdRef.current) {
+          localStorage.removeItem(LOCK_KEY);
+        }
+
         if (manualDisconnectRef.current || closingRef.current || unloadingRef.current) return;
         // Ошибка обычно сопровождается close(1006). Стартуем backoff-reconnect.
         scheduleReconnect();
@@ -508,6 +613,10 @@ export default function HomePage() {
       };
 
     } catch (err) {
+      if (localStorage.getItem(LOCK_KEY) === lockIdRef.current) {
+        localStorage.removeItem(LOCK_KEY);
+      }
+
       closingRef.current = true;
       if (socketRef.current) { try { socketRef.current.close(1000, 'Abort connect'); } catch { } }
       setError(err instanceof Error ? err.message : 'An unknown error occurred');
@@ -523,6 +632,11 @@ export default function HomePage() {
     if (socketRef.current) {
       try { socketRef.current.close(1001, 'User initiated disconnect'); } catch { }
     }
+
+    if (localStorage.getItem(LOCK_KEY) === lockIdRef.current) {
+      localStorage.removeItem(LOCK_KEY);
+    }
+
     setStatus('disconnected');
     setError(null);
     // сброс локальных состояний...
@@ -541,7 +655,6 @@ export default function HomePage() {
 
   return (
     <main className="flex flex-col items-center justify-start min-h-screen p-4 md:p-8">
-      {/* ... (заголовок без изменений) ... */}
       <h1
         className={`font-extrabold mb-12 bg-clip-text text-transparent bg-gradient-to-r from-teal-500 to-sky-600 tracking-tighter ${status === 'connected' ? 'text-3xl mt-4 hidden xl:block' : 'text-5xl md:text-6xl mt-8'}`}
       >
@@ -549,17 +662,35 @@ export default function HomePage() {
       </h1>
       {status !== 'connected' ? (
         <div className="w-full max-w-sm bg-card-bg p-8 rounded-xl shadow-lg flex flex-col gap-4 border border-gray-200">
-          {/* ... (форма входа без изменений) ... */}
           <input type="text" value={nickname} onChange={(e) => setNickname(e.target.value)} placeholder="Enter your nickname" className="p-3 rounded bg-gray-50 border border-gray-300 text-foreground focus:outline-none focus:ring-2 focus:ring-[var(--accent-hover)] transition shadow-inner" disabled={isConnecting} />
-          <button onClick={handleConnect} disabled={isConnecting || nickname.trim().length < 3} className="p-3 rounded bg-[var(--accent)] hover:bg-[var(--accent-hover)] font-bold text-white disabled:bg-gray-400 disabled:text-gray-200 disabled:cursor-wait transition shadow-md hover:shadow-lg active:scale-[.99] transform duration-150">
-            {isConnecting ? `Connecting: ${status.replace('_', ' ')}...` : 'Play'}
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              onClick={() => setMode('free_for_all')}
+              disabled={isConnecting}
+              className={`p-3 rounded-lg text-sm font-semibold border-2 transition ${mode === 'free_for_all' ? 'bg-[var(--accent)]/10 border-[var(--accent)] text-[var(--accent)] shadow-inner' : 'bg-gray-50 border-gray-200 hover:bg-gray-100'}`}
+            >
+              Free For All
+            </button>
+            <button
+              onClick={() => setMode('team_battle')}
+              disabled={isConnecting}
+              className={`p-3 rounded-lg text-sm font-semibold border-2 transition ${mode === 'team_battle' ? 'bg-[var(--accent)]/10 border-[var(--accent)] text-[var(--accent)] shadow-inner' : 'bg-gray-50 border-gray-200 hover:bg-gray-100'}`}
+            >
+              Team Battle
+            </button>
+          </div>
+          <button
+            onClick={handleConnect}
+            disabled={isConnecting || nickname.trim().length < 3 || isLocked}
+            className="p-3 rounded bg-[var(--accent)] hover:bg-[var(--accent-hover)] font-bold text-white disabled:bg-gray-400 disabled:text-gray-200 disabled:cursor-wait transition shadow-md hover:shadow-lg active:scale-[.99] transform duration-150"
+          >
+            {isConnecting ? `Connecting: ${status.replace('_', ' ')}...` : (isLocked ? 'Game Active Elsewhere' : 'Play')}
           </button>
           {error && <p className="text-red-500 text-center text-sm">{error}</p>}
         </div>
       ) : (
         <div className="w-full max-w-7xl flex flex-col xl:grid xl:grid-cols-[150px_1fr_250px] gap-8 items-center xl:items-start">
           <div className="order-1 xl:order-1 w-full max-w-sm xl:w-full xl:max-w-none p-0">
-            {/* ... (кнопка выхода без изменений) ... */}
             <div className="xl:sticky xl:top-8 flex flex-col items-center xl:items-start gap-4">
               <button onClick={handleDisconnect} className="w-full xl:w-auto p-2 rounded bg-red-600 hover:bg-red-500 font-bold text-white transition shadow-md active:scale-[.99] text-sm">
                 ← Quit Game
@@ -578,7 +709,6 @@ export default function HomePage() {
             />
           </div>
           <div className="order-2 xl:order-3 w-full max-w-sm xl:w-full">
-            {/* ... (лидерборд и панель способностей без изменений) ... */}
             <div className="bg-card-bg p-6 rounded-xl shadow-lg border border-gray-200">
               <h2 className="text-xl font-bold mb-4 border-b border-[var(--accent)]/50 text-[var(--accent)] pb-2 tracking-wide">
                 Leaderboard
@@ -614,6 +744,15 @@ export default function HomePage() {
                   ))}
               </div>
             </div>
+
+            {currentState && playerId && (
+              <TeamPanel
+                currentState={currentState}
+                playerId={playerId}
+                onSwitchTeam={handleSwitchTeam}
+              />
+            )}
+
             <PowerUpBar
               powerUpSlots={myPlayerInfo?.powerUpSlots}
               onUsePowerUp={handleUsePowerUp}
@@ -621,7 +760,6 @@ export default function HomePage() {
           </div>
         </div>
       )}
-      {/* ... (подсказки по управлению без изменений) ... */}
       {status === 'connected' && (
         <div className="mt-8 text-center text-gray-500 text-sm">
           <p>Use <b>W, A, S, D</b> or <b>Arrow Keys</b> to move.</p>
