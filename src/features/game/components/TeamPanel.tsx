@@ -1,7 +1,7 @@
 // src/features/game/components/TeamPanel.tsx
 "use client";
 import type { GameState, TeamId } from '@/features/game/types';
-import { SNAKE_COLORS } from '@/features/game/visuals';
+import { COLORS } from '@/features/game/config';
 
 interface TeamPanelProps {
     currentState: GameState;
@@ -25,7 +25,7 @@ export function TeamPanel({ currentState, playerId, onSwitchTeam }: TeamPanelPro
             <div className="flex flex-col gap-4">
                 {currentState.teams.map((team) => {
                     const isMyTeam = team.id === myTeamId;
-                    const teamColor = team.id === 'alpha' ? SNAKE_COLORS.teamAlpha : SNAKE_COLORS.teamBravo;
+                    const teamColor = team.id === 'alpha' ? COLORS.snakes.teamAlpha : COLORS.snakes.teamBravo;
 
                     return (
                         <div key={team.id} className={`p-3 rounded-lg border-2 ${isMyTeam ? 'bg-gray-50' : ''}`} style={{ borderColor: teamColor }}>

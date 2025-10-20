@@ -3,8 +3,7 @@
 
 import type { PowerUpType } from '@/features/game/types';
 import { POWERUP_CANVAS_GLYPH, PowerUpGlyph } from '@/features/game/icons';
-import { POWERUP_COLORS } from '@/features/game/visuals';
-import { THEME } from '@/features/game/theme';
+import { COLORS, THEME } from '@/features/game/config';
 
 interface PowerUpBarProps {
   powerUpSlots: (PowerUpType | null)[] | undefined;
@@ -29,7 +28,7 @@ export function PowerUpBar({ powerUpSlots, onUsePowerUp }: PowerUpBarProps) {
       <div className="grid grid-cols-3 gap-3">
         {slots.map((powerUp, index) => {
           const glyph = powerUp ? POWERUP_CANVAS_GLYPH[powerUp] : null;
-          const color = powerUp ? POWERUP_COLORS[powerUp] : undefined;
+          const color = powerUp ? COLORS.powerUps[powerUp] : undefined;
 
           return (
             <button

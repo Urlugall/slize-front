@@ -5,7 +5,7 @@
 
 import type { ComponentType } from 'react';
 import type { SVGProps } from 'react';
-import type { PowerUpType } from './types';
+import type { PowerUpType } from '@/features/game/types';
 import {
     Zap,            // SpeedBoost
     Gem,            // ScoreBoost
@@ -88,3 +88,4 @@ export function drawPowerUpGlyph(
     ctx.fillText(text, centerX, centerY + Math.max(1, px * 0.05));
     ctx.restore();
 }
+

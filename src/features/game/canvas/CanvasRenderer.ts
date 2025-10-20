@@ -2,17 +2,10 @@
 // Светлый канвас: мягкие сетки, скруглённые сегменты, поверапы в едином стиле.
 
 import type { GameOverInfo, GameState, PowerUpType } from '@/features/game/types';
-import {
-    BASE_CELL_SIZE, BASE_GRID_SIZE, VISUAL_SCALE_FACTOR,
-    SERVER_TICK_RATE, GRID_TRANSITION_MS,
-    PROJECTILE_RADIUS_RATIO, PROJECTILE_SPAWN_LEAD,
-    lerp, easeInOutCubic,
-} from '@/features/game/settings';
-import {
-    GRID_COLORS, FOOD_COLOR, SNAKE_COLORS, EFFECT_COLORS, BLOCK_COLORS,
-    POWERUP_BG, POWERUP_COLORS,
-} from '@/features/game/visuals';
+import { GAME_TIMING, PROJECTILES, COLORS } from '@/features/game/config';
+import { lerp, easeInOutCubic } from '@/features/game/lib/math';
 import { drawPowerUpGlyph, POWERUP_CANVAS_GLYPH } from '@/features/game/icons';
+import { calculateCanvasSize } from '@/features/game/lib/canvasMetrics';
 
 const DIR = { up: { x: 0, y: -1 }, down: { x: 0, y: 1 }, left: { x: -1, y: 0 }, right: { x: 1, y: 0 } } as const;
 
@@ -66,7 +59,7 @@ export class CanvasRenderer {
         const ctx = this.dynamicCanvas.getContext('2d'); if (!ctx) return;
         ctx.clearRect(0, 0, m.canvasSize, m.canvasSize);
 
-        const t = Math.min(Math.max((now - this.lastTs) / SERVER_TICK_RATE, 0), 1);
+        const t = Math.min(Math.max((now - this.lastTs) / GAME_TIMING.serverTickRate, 0), 1);
 
         this.drawGridLayer(ctx, m, now);
         this.drawBlocks(ctx, m);
@@ -101,7 +94,7 @@ export class CanvasRenderer {
             ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
             ctx.imageSmoothingEnabled = false;
             if (isStatic) {
-                ctx.fillStyle = GRID_COLORS.background;
+                ctx.fillStyle = COLORS.grid.background;
                 ctx.fillRect(0, 0, cssW, cssH);
             }
         }
@@ -109,8 +102,7 @@ export class CanvasRenderer {
 
     private resolveMetrics(gridSize?: number | null): Metrics | null {
         if (!gridSize || gridSize <= 0) return null;
-        const canvasSize =
-            BASE_CELL_SIZE * (BASE_GRID_SIZE + VISUAL_SCALE_FACTOR * (gridSize - BASE_GRID_SIZE));
+        const canvasSize = calculateCanvasSize(gridSize);
         const cellSize = canvasSize / gridSize;
         return { canvasSize, cellSize, gridSize };
     }
@@ -139,10 +131,7 @@ export class CanvasRenderer {
 
     private drawGridLayer(ctx: CanvasRenderingContext2D, m: Metrics, now: number) {
         if (this.lastGridSize && this.lastGridSize !== m.gridSize && !this.gridTransition) {
-            const prevCell =
-                (BASE_CELL_SIZE *
-                    (BASE_GRID_SIZE + VISUAL_SCALE_FACTOR * (this.lastGridSize - BASE_GRID_SIZE))) /
-                this.lastGridSize;
+            const prevCell = calculateCanvasSize(this.lastGridSize) / this.lastGridSize;
             this.gridTransition = { from: prevCell, to: m.cellSize, startedAt: performance.now() };
         }
         this.lastGridSize = m.gridSize;
@@ -155,7 +144,7 @@ export class CanvasRenderer {
             const gridLines = Math.round(m.canvasSize / cellSize);
 
             // ТОЛЬКО линии сетки; никаких краевых градиентов и «ободков»
-            ctx.strokeStyle = GRID_COLORS.line;
+            ctx.strokeStyle = COLORS.grid.line;
             ctx.lineWidth = 1;
             ctx.beginPath();
             // Не рисуем 0-ю и последнюю линии — убирает «рамку» по периметру
@@ -171,7 +160,7 @@ export class CanvasRenderer {
         };
 
         if (this.gridTransition) {
-            const progress = Math.min((now - this.gridTransition.startedAt) / GRID_TRANSITION_MS, 1);
+            const progress = Math.min((now - this.gridTransition.startedAt) / GAME_TIMING.gridTransitionMs, 1);
             const eased = easeInOutCubic(progress);
             draw(this.gridTransition.from, 1 - eased);
             draw(m.cellSize, eased);
@@ -187,11 +176,11 @@ export class CanvasRenderer {
             const x = b.x * m.cellSize, y = b.y * m.cellSize;
             if (b.state === 'warning') {
                 const ph = Math.abs(Math.sin(Date.now() / 320));
-                ctx.fillStyle = ph > 0.5 ? BLOCK_COLORS.pulse : BLOCK_COLORS.warning;
+                ctx.fillStyle = ph > 0.5 ? COLORS.blocks.pulse : COLORS.blocks.warning;
             } else if (b.state === 'kill') {
-                ctx.fillStyle = BLOCK_COLORS.kill;
+                ctx.fillStyle = COLORS.blocks.kill;
             } else {
-                ctx.fillStyle = BLOCK_COLORS.solid;
+                ctx.fillStyle = COLORS.blocks.solid;
             }
             // Скругляем блоки чуть-чуть, чтобы общий стиль был дружелюбнее
             this.roundRect(ctx, x + 0.5, y + 0.5, m.cellSize - 1, m.cellSize - 1, Math.max(2, m.cellSize * 0.12));
@@ -200,7 +189,7 @@ export class CanvasRenderer {
     }
 
     private drawFood(ctx: CanvasRenderingContext2D, m: Metrics) {
-        const r = m.cellSize / 2.6; ctx.fillStyle = FOOD_COLOR;
+        const r = m.cellSize / 2.6; ctx.fillStyle = COLORS.food;
         for (const f of this.curr!.food) {
             const cx = f.x * m.cellSize + m.cellSize / 2;
             const cy = f.y * m.cellSize + m.cellSize / 2;
@@ -214,7 +203,7 @@ export class CanvasRenderer {
             const cx = p.position.x * m.cellSize + m.cellSize / 2;
             const cy = p.position.y * m.cellSize + m.cellSize / 2;
             const R = m.cellSize * 0.48;
-            const color = POWERUP_COLORS[p.type as PowerUpType];
+            const color = COLORS.powerUps[p.type as PowerUpType];
 
             // Мягкое внешнее сияние
             ctx.save();
@@ -226,7 +215,7 @@ export class CanvasRenderer {
 
             // Таблетка (светлая)
             ctx.save();
-            ctx.fillStyle = POWERUP_BG;
+            ctx.fillStyle = COLORS.powerUpBg;
             ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2); ctx.fill();
 
             // Цветное кольцо
@@ -243,7 +232,7 @@ export class CanvasRenderer {
     }
 
     private drawProjectiles(ctx: CanvasRenderingContext2D, m: Metrics, t: number) {
-        const g = this.curr!, prev = this.prev, rad = m.cellSize * PROJECTILE_RADIUS_RATIO;
+        const g = this.curr!, prev = this.prev, rad = m.cellSize * PROJECTILES.radiusRatio;
 
         for (const pr of g.projectiles) {
             const prevPr = prev?.projectiles.find(p => p.id === pr.id);
@@ -257,11 +246,11 @@ export class CanvasRenderer {
                 const ownerCurr = g.snakes.find(s => s.id === pr.ownerId);
                 const head = ownerPrev?.body[0] ?? ownerCurr?.body[0];
                 if (head) {
-                    startCX = head.x + 0.5 + dir.x * PROJECTILE_SPAWN_LEAD;
-                    startCY = head.y + 0.5 + dir.y * PROJECTILE_SPAWN_LEAD;
+                    startCX = head.x + 0.5 + dir.x * PROJECTILES.spawnLead;
+                    startCY = head.y + 0.5 + dir.y * PROJECTILES.spawnLead;
                 } else {
-                    startCX = targetCX - dir.x * PROJECTILE_SPAWN_LEAD;
-                    startCY = targetCY - dir.y * PROJECTILE_SPAWN_LEAD;
+                    startCX = targetCX - dir.x * PROJECTILES.spawnLead;
+                    startCY = targetCY - dir.y * PROJECTILES.spawnLead;
                 }
             }
 
@@ -270,7 +259,7 @@ export class CanvasRenderer {
 
             ctx.save();
             ctx.globalCompositeOperation = 'lighter';
-            ctx.fillStyle = EFFECT_COLORS.projectile;
+            ctx.fillStyle = COLORS.effects.projectile;
             ctx.globalAlpha = 0.14; ctx.beginPath(); ctx.arc(x, y, rad * 2.2, 0, Math.PI * 2); ctx.fill();
             ctx.globalAlpha = 0.28; ctx.beginPath(); ctx.arc(x, y, rad * 1.5, 0, Math.PI * 2); ctx.fill();
             ctx.globalAlpha = 1.00; ctx.beginPath(); ctx.arc(x, y, rad, 0, Math.PI * 2); ctx.fill();
@@ -293,13 +282,13 @@ export class CanvasRenderer {
             let baseColor: string;
 
             if (isDead) {
-                baseColor = SNAKE_COLORS.dead;
+                baseColor = COLORS.snakes.dead;
             } else if (teamId) {
                 // В командном режиме цвет определяется командой
-                baseColor = teamId === 'alpha' ? SNAKE_COLORS.teamAlpha : SNAKE_COLORS.teamBravo;
+                baseColor = teamId === 'alpha' ? COLORS.snakes.teamAlpha : COLORS.snakes.teamBravo;
             } else {
                 // В FFA режиме цвет определяется 'me' или 'other'
-                baseColor = isMe ? SNAKE_COLORS.me : SNAKE_COLORS.other;
+                baseColor = isMe ? COLORS.snakes.me : COLORS.snakes.other;
             }
 
             // "Я" всегда чуть ярче и непрозрачнее (если не призрак/мертв)
@@ -323,7 +312,7 @@ export class CanvasRenderer {
                     ctx.globalCompositeOperation = 'lighter';
                     const cx = x + m.cellSize / 2, cy = y + m.cellSize / 2;
                     const rOuter = Math.max(6, m.cellSize * 0.85);
-                    ctx.fillStyle = EFFECT_COLORS.speedBoostGlow;
+                    ctx.fillStyle = COLORS.effects.speedBoostGlow;
                     ctx.globalAlpha = 0.10; ctx.beginPath(); ctx.arc(cx, cy, rOuter, 0, Math.PI * 2); ctx.fill();
                     ctx.globalAlpha = 0.18; ctx.beginPath(); ctx.arc(cx, cy, rOuter * 0.6, 0, Math.PI * 2); ctx.fill();
                     ctx.restore();
@@ -342,7 +331,7 @@ export class CanvasRenderer {
 
                 // Призрак
                 if (isGhost) {
-                    ctx.fillStyle = EFFECT_COLORS.ghostOverlay;
+                    ctx.fillStyle = COLORS.effects.ghostOverlay;
                     this.roundRect(ctx, x, y, m.cellSize, m.cellSize, radius);
                     ctx.fill();
                 }
@@ -350,7 +339,7 @@ export class CanvasRenderer {
                 // Голова — глаза с лёгким свечением
                 if (i === 0) {
                     // Тёмные «пиксельные» глаза
-                    ctx.fillStyle = SNAKE_COLORS.eyes;
+                    ctx.fillStyle = COLORS.snakes.eyes;
                     const eye = Math.max(2, m.cellSize * 0.22);
                     const off = Math.max(2, m.cellSize * 0.18);
                     const ex1 = x + off, ey1 = y + off;
@@ -383,7 +372,7 @@ export class CanvasRenderer {
                 const c = cnv.getContext('2d');
                 if (c) {
                     c.clearRect(0, 0, cnv.width, cnv.height);
-                    c.fillStyle = SNAKE_COLORS.nickname;
+                    c.fillStyle = COLORS.snakes.nickname;
                     c.font = '600 12px system-ui, -apple-system, Segoe UI, Roboto, sans-serif';
                     c.textAlign = 'center';
                     // Небольшая светлая «подложка» вокруг текста для читабельности
@@ -419,7 +408,7 @@ export class CanvasRenderer {
                 }
             } else {
                 const rad = m.cellSize * 1.5 * k;
-                ctx.fillStyle = EFFECT_COLORS.vfxExplosion;
+                ctx.fillStyle = COLORS.effects.vfxExplosion;
                 ctx.beginPath(); ctx.arc(cx, cy, rad, 0, Math.PI * 2); ctx.fill();
             }
             ctx.restore();
@@ -506,7 +495,7 @@ export class CanvasRenderer {
 
         // Тексты
         const titleY = boxY + boxH * 0.25;
-        ctx.fillStyle = SNAKE_COLORS.me;
+        ctx.fillStyle = COLORS.snakes.me;
         ctx.font = `700 ${Math.max(24, m.canvasSize * 0.04)}px system-ui`;
         ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
         ctx.fillText('ROUND WINNER', m.canvasSize / 2, titleY);
@@ -523,7 +512,7 @@ export class CanvasRenderer {
         ctx.fillText(`Score: ${winnerScore}`, m.canvasSize / 2, scoreY);
 
         const timerY = boxY + boxH * 0.85;
-        ctx.fillStyle = seconds === 0 ? BLOCK_COLORS.kill : 'rgba(15, 23, 42, 0.6)'; // (было '#52525B')
+        ctx.fillStyle = seconds === 0 ? COLORS.blocks.kill : 'rgba(15, 23, 42, 0.6)'; // (было '#52525B')
         ctx.font = `600 ${Math.max(18, m.canvasSize * 0.03)}px system-ui`;
         ctx.fillText(`Restarting in ${secondsStr} seconds...`, m.canvasSize / 2, timerY);
 

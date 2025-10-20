@@ -7,11 +7,7 @@
 import { useEffect, useRef } from 'react';
 import type { GameState, GameOverInfo } from '@/features/game/types';
 import { CanvasRenderer, type VFX } from '@/features/game/canvas/CanvasRenderer';
-import {
-  BASE_GRID_SIZE,
-  BASE_CELL_SIZE,
-  VISUAL_SCALE_FACTOR,
-} from '@/features/game/settings';
+import { calculateCanvasSize } from '@/features/game/lib/canvasMetrics';
 
 interface GameCanvasProps {
   previousState: GameState | null;
@@ -76,12 +72,8 @@ export function GameCanvas({
 
   // Вычисляем CSS-размер по текущему gridSize (как раньше)
   const gridSizeForLayout = currentState?.gridSize ?? previousState?.gridSize ?? null;
-  const cssSize = (() => {
-    if (!gridSizeForLayout || gridSizeForLayout <= 0) return 0;
-    const canvasSize =
-      BASE_CELL_SIZE * (BASE_GRID_SIZE + VISUAL_SCALE_FACTOR * (gridSizeForLayout - BASE_GRID_SIZE));
-    return canvasSize;
-  })();
+  const cssSize =
+    gridSizeForLayout && gridSizeForLayout > 0 ? calculateCanvasSize(gridSizeForLayout) : 0;
 
   return (
     <div
