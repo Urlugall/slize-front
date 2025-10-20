@@ -4,14 +4,51 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { GameCanvas } from '@/features/game/components/GameCanvas';
 import { PowerUpBar } from '@/features/game/components/PowerUpBar';
-import type { GameState, ServerMessage } from '@/features/game/types';
+import type { GameOverInfo, GameState, ServerMessage } from '@/features/game/types';
 import { soundManager } from '@/features/game/lib/SoundManager';
+import { SERVER_TICK_RATE, ROUND_DURATION_MS } from '@/features/game/settings';
 
 type ConnectionStatus =
   | 'disconnected' | 'authenticating'
   | 'finding_lobby' | 'connecting' | 'connected';
 
 type Direction = 'up' | 'down' | 'left' | 'right';
+
+const isServerMessage = (data: unknown): data is ServerMessage => {
+  if (!data || typeof data !== 'object') return false;
+  const maybe = data as { type?: unknown; payload?: unknown };
+  if (typeof maybe.type !== 'string') return false;
+
+  switch (maybe.type) {
+    case 'state':
+      return typeof maybe.payload === 'object' && maybe.payload !== null;
+    case 'player_joined':
+      return !!maybe.payload
+        && typeof (maybe.payload as { playerId?: unknown }).playerId === 'string'
+        && typeof (maybe.payload as { nickname?: unknown }).nickname === 'string';
+    case 'player_left':
+    case 'player_died':
+      return !!maybe.payload
+        && typeof (maybe.payload as { playerId?: unknown }).playerId === 'string';
+    case 'game_over':
+      return !!maybe.payload
+        && typeof (maybe.payload as { winnerId?: unknown }).winnerId === 'string'
+        && typeof (maybe.payload as { winnerNickname?: unknown }).winnerNickname === 'string'
+        && typeof (maybe.payload as { resetAt?: unknown }).resetAt === 'number';
+    default:
+      return false;
+  }
+};
+
+const parseWsMessage = (data: unknown): ServerMessage | null => {
+  if (typeof data !== 'string') return null;
+  try {
+    const parsed: unknown = JSON.parse(data);
+    return isServerMessage(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+};
 
 const getDirectionFromSnake = (snake: { body: { x: number, y: number }[] }): Direction | null => {
   if (snake.body.length < 2) return null;
@@ -44,13 +81,12 @@ export default function HomePage() {
   const [status, setStatus] = useState<ConnectionStatus>('disconnected');
   const [error, setError] = useState<string | null>(null);
 
-  // --- ИЗМЕНЕНИЕ: Возвращаем состояния для интерполяции ---
   const [previousState, setPreviousState] = useState<GameState | null>(null);
   const [currentState, setCurrentState] = useState<GameState | null>(null);
   const [lastStateTimestamp, setLastStateTimestamp] = useState(0);
   const animationFrameId = useRef<number | null>(null);
   const previousStateForEffectsRef = useRef<GameState | null>(null);
-
+  const [gameOverInfo, setGameOverInfo] = useState<GameOverInfo | null>(null);
 
   const [vfx, setVfx] = useState<VFX[]>([]);
   const [deadPlayerIds, setDeadPlayerIds] = useState<Set<string>>(new Set());
@@ -65,6 +101,9 @@ export default function HomePage() {
 
   const closingRef = useRef(false);      // мы инициировали закрытие
   const unloadingRef = useRef(false);    // страница уходит
+  const reconnectTimerRef = useRef<number | null>(null);
+  const reconnectAttemptRef = useRef(0);
+  const lastLobbyIdRef = useRef<string | null>(null); // чтобы попытаться вернуться в тот же лобби
 
   const sendWsMessage = (message: object) => {
     if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
@@ -75,6 +114,121 @@ export default function HomePage() {
   const handleUsePowerUp = (slot: number) => {
     sendWsMessage({ action: 'use_powerup', slot });
   };
+
+  // --- Reconnect logic ---
+  const scheduleReconnect = useCallback(() => {
+    // Не реконнектимся, если пользователь сам отключился или страница уходит
+    if (manualDisconnectRef.current || closingRef.current || unloadingRef.current) return;
+    // Защита от мульти-таймеров
+    if (reconnectTimerRef.current) return;
+    // Экспоненциальный backoff: 0.5s, 1s, 2s, 4s, ... макс 10s
+    const attempt = Math.min(reconnectAttemptRef.current + 1, 6);
+    reconnectAttemptRef.current = attempt;
+    const delayMs = Math.min(10000, 500 * Math.pow(2, attempt - 1));
+    reconnectTimerRef.current = window.setTimeout(async () => {
+      reconnectTimerRef.current = null;
+      // Пробуем восстановить соединение, используя те же nickname/token
+      // Если лобби запомнен — пробуем сразу в него, иначе обычный flow
+      try {
+        if (token && playerId && nickname) {
+          await reconnectToLobby();
+        } else {
+          // fallback — полный connect-flow
+          await handleConnect();
+        }
+      } catch {
+        // если не вышло — планируем следующую попытку
+        scheduleReconnect();
+      }
+    }, delayMs) as unknown as number;
+  }, [token, playerId, nickname]);
+
+  const reconnectToLobby = useCallback(async () => {
+    if (connectingRef.current) return;
+    connectingRef.current = true;
+    setStatus('connecting');
+    setError(null);
+    try {
+      // Если у нас нет актуального lobbyId, попросим бек (он подберёт лучший / тот же)
+      let lobbyId = lastLobbyIdRef.current;
+      if (!lobbyId) {
+        const lobbyResponse = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/lobbies/find-best`, {
+          headers: { 'Authorization': `Bearer ${sessionStorage.getItem('slize_token')}` },
+        });
+        if (!lobbyResponse.ok) throw new Error('Could not find a lobby.');
+        const json = await lobbyResponse.json();
+        lobbyId = json.lobbyId;
+        lastLobbyIdRef.current = lobbyId;
+      }
+      const authToken = token ?? sessionStorage.getItem('slize_token');
+      const nick = nickname;
+      const wsUrl = `${process.env.NEXT_PUBLIC_WS_URL}/lobbies/${lobbyId}/ws?token=${authToken}&nickname=${encodeURIComponent(nick)}`;
+      const socket = new WebSocket(wsUrl);
+      socketRef.current = socket;
+      // остальная установка обработчиков — такая же, как в handleConnect (onopen/onmessage/onclose/onerror)
+      // Чтобы не дублировать код, можно вынести установку хендлеров в утилиту setSocketHandlers(socket)
+      // но для краткости сейчас оставили как есть (или переиспользуйте кусок из handleConnect).
+      socket.onopen = () => {
+        setStatus('connected');
+        connectingRef.current = false;
+        reconnectAttemptRef.current = 0;
+        soundManager.play('connect');
+      };
+      socket.onmessage = (event) => {
+        if (event.data === 'ping' && socketRef.current?.readyState === WebSocket.OPEN) {
+          socketRef.current?.send('pong');
+          return;
+        }
+        const message: ServerMessage = JSON.parse(event.data);
+        switch (message.type) {
+          case 'state':
+            setCurrentState(prev => {
+              setPreviousState(prev);
+              previousStateForEffectsRef.current = prev;
+              if (message.payload.gameOver) setGameOverInfo(message.payload.gameOver);
+              return message.payload;
+            });
+            setLastStateTimestamp(performance.now());
+            break;
+          case 'game_over':
+            setGameOverInfo(message.payload);
+            soundManager.play('death');
+            break;
+          case 'player_died':
+            soundManager.play('death');
+            const deadSnake = (previousStateForEffectsRef.current || currentState)?.snakes.find(s => s.id === message.payload.playerId);
+            if (deadSnake?.body.length) {
+              const head = deadSnake.body[0];
+              setVfx(prev => [...prev, { id: Date.now(), type: 'explosion', x: head.x, y: head.y, createdAt: Date.now(), duration: 400 }]);
+            }
+            setDeadPlayerIds(prev => new Set(prev).add(message.payload.playerId));
+            setTimeout(() => {
+              setDeadPlayerIds(prev => { const next = new Set(prev); next.delete(message.payload.playerId); return next; });
+            }, 500);
+            break;
+        }
+      };
+      socket.onclose = (ev) => {
+        socketRef.current = null;
+        connectingRef.current = false;
+        if (manualDisconnectRef.current || closingRef.current || unloadingRef.current) return;
+        if (ev.code === 4000) return; // replaced
+        scheduleReconnect();
+        setStatus('disconnected');
+      };
+      socket.onerror = (e) => {
+        if (manualDisconnectRef.current || closingRef.current || unloadingRef.current) return;
+        scheduleReconnect();
+        setError('Connection error.');
+        setStatus('disconnected');
+        connectingRef.current = false;
+        console.warn('WS error (reconnect)', e);
+      };
+    } catch (e) {
+      connectingRef.current = false;
+      throw e;
+    }
+  }, [nickname, currentState, scheduleReconnect]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -105,9 +259,7 @@ export default function HomePage() {
   }, []);
 
 
-  // --- ИЗМЕНЕНИЕ: Игровой цикл теперь снова простой ---
   const gameLoop = useCallback(() => {
-    // Логика отправки инпута
     const latestInput = latestDirectionInputRef.current;
     const actualDirection = myCurrentDirectionRef.current;
     if (latestInput && actualDirection && latestInput !== actualDirection && !isOpposite(actualDirection, latestInput)) {
@@ -118,9 +270,8 @@ export default function HomePage() {
       }
     }
 
-    // Очистка старых VFX и запуск нового кадра
     animationFrameId.current = requestAnimationFrame(gameLoop);
-  }, []); // Зависимости убраны для стабильности
+  }, []);
 
   useEffect(() => {
     if (status === 'connected') {
@@ -156,6 +307,10 @@ export default function HomePage() {
     const myOldSnake = previousStateForEffects.snakes.find(s => s.id === playerId);
     const myNewSnake = currentState.snakes.find(s => s.id === playerId);
 
+    if (currentState && !currentState.gameOver && gameOverInfo) {
+      setGameOverInfo(null);
+    }
+
     if (myNewPlayer && myOldPlayer && myNewSnake && myOldSnake && myNewSnake.body.length > myOldSnake.body.length) {
       soundManager.play('eat');
       const head = myNewSnake.body[0];
@@ -177,13 +332,9 @@ export default function HomePage() {
   }, [currentState, playerId]); // previousStateForEffectsRef is a ref, no need to list it
 
   useEffect(() => {
-    const savedToken = localStorage.getItem('slize_token');
-    const savedPlayerId = localStorage.getItem('slize_playerId');
     const savedNickname = localStorage.getItem('slize_nickname');
 
-    if (savedToken && savedPlayerId && savedNickname) {
-      setToken(savedToken);
-      setPlayerId(savedPlayerId);
+    if (savedNickname) {
       setNickname(savedNickname);
     }
   }, []);
@@ -205,6 +356,7 @@ export default function HomePage() {
     setPreviousState(null);
     previousStateForEffectsRef.current = null;
     setDeadPlayerIds(new Set());
+    setGameOverInfo(null);
     setStatus('authenticating');
 
     try {
@@ -223,8 +375,8 @@ export default function HomePage() {
       setPlayerId(newPlayerId);
       setToken(authToken);
       try {
-        localStorage.setItem('slize_token', authToken);
-        localStorage.setItem('slize_playerId', newPlayerId);
+        sessionStorage.setItem('slize_token', authToken);
+        sessionStorage.setItem('slize_playerId', newPlayerId);
         localStorage.setItem('slize_nickname', nickname);
       } catch { }
 
@@ -234,6 +386,7 @@ export default function HomePage() {
       });
       if (!lobbyResponse.ok) throw new Error('Could not find a lobby.');
       const { lobbyId } = await lobbyResponse.json();
+      lastLobbyIdRef.current = lobbyId;
 
       setStatus('connecting');
       const wsUrl = `${process.env.NEXT_PUBLIC_WS_URL}/lobbies/${lobbyId}/ws?token=${authToken}&nickname=${encodeURIComponent(nickname)}`;
@@ -241,18 +394,19 @@ export default function HomePage() {
       socketRef.current = socket;
 
       // аккуратно закрывать при уходе
-      const onUnload = () => {
+      const onBeforeUnload = () => {
         unloadingRef.current = true;
         closingRef.current = true;
         try { socket.close(1001, 'Page unloading'); } catch { }
       };
-      window.addEventListener('pagehide', onUnload);
-      window.addEventListener('beforeunload', onUnload);
+      // ВАЖНО: НЕ используем pagehide — он часто стреляет при сворачивании/переходе в bfcache
+      window.addEventListener('beforeunload', onBeforeUnload);
 
       socket.onopen = () => {
         setStatus('connected');
         connectingRef.current = false;
         manualDisconnectRef.current = false;
+        reconnectAttemptRef.current = 0;
         soundManager.play('connect');
       };
 
@@ -262,7 +416,12 @@ export default function HomePage() {
           return;
         }
 
-        const message: ServerMessage = JSON.parse(event.data);
+        const message = parseWsMessage(event.data);
+        if (!message) {
+          // Не валимся на мусорных/бинарных/случайных фреймах
+          console.warn('WS non-JSON or unknown message ignored');
+          return;
+        }
 
         switch (message.type) {
           case 'state':
@@ -270,9 +429,14 @@ export default function HomePage() {
             setCurrentState(prev => {
               setPreviousState(prev); // Текущее становится предыдущим
               previousStateForEffectsRef.current = prev; // Also update ref for sound/VFX
+              if (message.payload.gameOver) setGameOverInfo(message.payload.gameOver);
               return message.payload; // Новое состояние становится текущим
             });
             setLastStateTimestamp(performance.now()); // Запоминаем время получения
+            break;
+          case 'game_over':
+            setGameOverInfo(message.payload);
+            soundManager.play('death');
             break;
           case 'player_died':
             soundManager.play('death');
@@ -297,8 +461,7 @@ export default function HomePage() {
       };
 
       socket.onclose = (ev) => {
-        window.removeEventListener('pagehide', onUnload);
-        window.removeEventListener('beforeunload', onUnload);
+        window.removeEventListener('beforeunload', onBeforeUnload);
         socketRef.current = null;
         connectingRef.current = false;
 
@@ -309,11 +472,14 @@ export default function HomePage() {
         }
         if (ev.code === 4000) return; // «replaced by fresher one»
 
+        scheduleReconnect();
         setStatus('disconnected');
       };
 
       socket.onerror = (e) => {
         if (manualDisconnectRef.current || closingRef.current || unloadingRef.current) return;
+        // Ошибка обычно сопровождается close(1006). Стартуем backoff-reconnect.
+        scheduleReconnect();
         setError('Connection error.');
         setStatus('disconnected');
         connectingRef.current = false;
@@ -332,6 +498,7 @@ export default function HomePage() {
   const handleDisconnect = () => {
     manualDisconnectRef.current = true;
     closingRef.current = true;
+    if (reconnectTimerRef.current) { clearTimeout(reconnectTimerRef.current); reconnectTimerRef.current = null; }
     if (socketRef.current) {
       try { socketRef.current.close(1001, 'User initiated disconnect'); } catch { }
     }
@@ -342,6 +509,7 @@ export default function HomePage() {
     setPreviousState(null);
     previousStateForEffectsRef.current = null;
     setDeadPlayerIds(new Set());
+    setGameOverInfo(null);
     lastSentDirectionRef.current = null;
     latestDirectionInputRef.current = null;
     myCurrentDirectionRef.current = null;
@@ -385,6 +553,7 @@ export default function HomePage() {
               playerId={playerId}
               deadPlayerIds={deadPlayerIds}
               vfx={vfx}
+              gameOver={gameOverInfo}
             />
           </div>
           <div className="order-2 xl:order-3 w-full max-w-sm xl:w-full">
@@ -393,6 +562,24 @@ export default function HomePage() {
               <h2 className="text-xl font-bold mb-4 border-b border-[var(--accent)]/50 text-[var(--accent)] pb-2 tracking-wide">
                 Leaderboard
               </h2>
+              {/* Таймер раунда: рассчитываем от server tick, формат mm:ss */}
+              {currentState && (
+                <div
+                  className="px-2.5 py-1 rounded-md text-xs font-semibold"
+                  style={{ background: 'rgba(15,23,42,0.06)', color: 'var(--foreground)' }}
+                  title="Time left in the round"
+                >
+                  {(() => {
+                    // Важно: считаем на фронте так же, как на бэке, чтобы цифры совпадали.
+                    const elapsed = currentState.tick * SERVER_TICK_RATE;
+                    const remain = Math.max(0, ROUND_DURATION_MS - elapsed);
+                    const s = Math.floor(remain / 1000);
+                    const mm = String(Math.floor(s / 60)).padStart(2, '0');
+                    const ss = String(s % 60).padStart(2, '0');
+                    return <>Round&nbsp;<span className="text-[var(--accent)]">{mm}:{ss}</span></>;
+                  })()}
+                </div>
+              )}
               <div className="flex flex-col gap-1">
                 {currentState?.players && Object.entries(currentState.players)
                   .sort(([, a], [, b]) => b.score - a.score)
@@ -423,10 +610,3 @@ export default function HomePage() {
     </main>
   );
 }
-
-
-
-
-
-
-
