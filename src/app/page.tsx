@@ -1,4 +1,4 @@
-// src/app/page.tsx
+﻿// src/app/page.tsx
 "use client";
 
 import { GameCanvas } from '@/features/game/components/GameCanvas';
@@ -89,6 +89,9 @@ export default function HomePage() {
                 Quit Game
               </button>
             </div>
+            {currentState && playerId && (
+              <TeamPanel currentState={currentState} playerId={playerId} onSwitchTeam={handleSwitchTeam} />
+            )}
           </div>
           <div className="order-3 xl:order-2 flex-shrink-0 flex justify-center w-full">
             <GameCanvas
@@ -145,10 +148,6 @@ export default function HomePage() {
                     ))}
               </div>
             </div>
-
-            {currentState && playerId && (
-              <TeamPanel currentState={currentState} playerId={playerId} onSwitchTeam={handleSwitchTeam} />
-            )}
 
             <PowerUpBar powerUpSlots={myPlayerInfo?.powerUpSlots} onUsePowerUp={handleUsePowerUp} />
           </div>
