@@ -1,8 +1,8 @@
 // src/app/main/play/page.tsx
 "use client";
 
-import { useCallback, useEffect, useMemo } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useCallback, useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 
 import { GameCanvas } from "@/features/game/components/GameCanvas";
 import { PowerUpBar } from "@/features/game/components/PowerUpBar";
@@ -98,22 +98,20 @@ function BlockingErrorModal({
 }
 
 export default function PlayPage() {
-  const searchParams = useSearchParams();
   const router = useRouter();
+  const [modeFromParams, setModeFromParams] = useState<GameModeKey>("free_for_all");
 
-  const modeFromParams = useMemo(
-    () => resolveMode(searchParams.get("mode")),
-    [searchParams]
-  );
-
-  // Поддерживаем/исправляем query param 'mode'
   useEffect(() => {
-    const currentParam = searchParams.get("mode");
-    if (currentParam && resolveMode(currentParam) === currentParam) return;
-    const params = new URLSearchParams(searchParams.toString());
-    params.set("mode", modeFromParams);
-    router.replace(`/main/play?${params.toString()}`, { scroll: false });
-  }, [modeFromParams, router, searchParams]);
+    // Комментарий по сути: этот код выполнится только на клиенте после гидратации.
+    // При статическом пререндере window недоступен, поэтому дефолт останется "free_for_all".
+    try {
+      const search = window.location.search;
+      const mode = new URLSearchParams(search).get("mode");
+      setModeFromParams(resolveMode(mode));
+    } catch {
+      setModeFromParams("free_for_all");
+    }
+  }, []);
 
   const {
     nickname,
