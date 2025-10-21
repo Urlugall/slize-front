@@ -55,6 +55,7 @@ export interface GameOverInfo {
   winnerId: string;
   winnerNickname: string;
   resetAt: number;
+  winnerScore: number;
 }
 
 export interface TeamState {

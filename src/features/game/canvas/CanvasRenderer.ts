@@ -505,7 +505,7 @@ export class CanvasRenderer {
         ctx.font = `700 ${Math.max(36, m.canvasSize * 0.07)}px system-ui`;
         ctx.fillText(info.winnerNickname, m.canvasSize / 2, nicknameY);
 
-        const winnerScore = this.curr!.players[info.winnerId]?.score ?? 'N/A';
+        const winnerScore = info.winnerScore;
         const scoreY = nicknameY + Math.max(6, m.canvasSize * 0.04);
         ctx.fillStyle = '#0EA5A6';
         ctx.font = `700 ${Math.max(24, m.canvasSize * 0.04)}px system-ui`;

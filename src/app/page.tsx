@@ -27,6 +27,7 @@ export default function HomePage() {
     handleDisconnect,
     handleSwitchTeam,
     handleUsePowerUp,
+    isSilentlyReconnecting,
   } = useGameClient();
 
   const isConnecting = status !== 'disconnected' && status !== 'connected';
@@ -39,6 +40,16 @@ export default function HomePage() {
       >
         Slize - Multiplayer Snake Game
       </h1>
+      
+      {status === 'connected' && isSilentlyReconnecting && (
+        <div className="fixed top-3 right-3 z-50 select-none">
+          <div className="flex items-center gap-2 rounded-full bg-white/90 backdrop-blur px-3 py-1 shadow-md border border-black/5">
+            <span className="inline-block h-2 w-2 rounded-full animate-pulse bg-yellow-500" />
+            <span className="text-xs font-medium text-gray-700">Reconnecting…</span>
+          </div>
+        </div>
+      )}
+
       {status !== 'connected' ? (
         <div className="w-full max-w-sm bg-card-bg p-8 rounded-xl shadow-lg flex flex-col gap-4 border border-gray-200">
           <input
@@ -73,8 +84,8 @@ export default function HomePage() {
             {isConnecting
               ? `Connecting: ${status.replace('_', ' ')}...`
               : isLocked
-              ? 'Game Active Elsewhere'
-              : 'Play'}
+                ? 'Game Active Elsewhere'
+                : 'Play'}
           </button>
           {error && <p className="text-red-500 text-center text-sm">{error}</p>}
         </div>

@@ -47,7 +47,8 @@ const isServerMessage = (data: unknown): data is ServerMessage => {
         !!maybe.payload &&
         typeof (maybe.payload as { winnerId?: unknown }).winnerId === 'string' &&
         typeof (maybe.payload as { winnerNickname?: unknown }).winnerNickname === 'string' &&
-        typeof (maybe.payload as { resetAt?: unknown }).resetAt === 'number'
+        typeof (maybe.payload as { resetAt?: unknown }).resetAt === 'number' &&
+        typeof (maybe.payload as { winnerScore?: unknown }).winnerScore === 'number'
       );
     case 'team_switched':
       return (
@@ -110,6 +111,7 @@ export interface UseGameClientResult {
   handleDisconnect: () => void;
   handleSwitchTeam: (teamId: TeamId) => void;
   handleUsePowerUp: (slot: number) => void;
+  isSilentlyReconnecting: boolean;
 }
 
 export function useGameClient(): UseGameClientResult {
@@ -132,6 +134,7 @@ export function useGameClient(): UseGameClientResult {
   const currentStateRef = useRef<GameState | null>(null);
   const [vfx, setVfx] = useState<VFX[]>([]);
   const [deadPlayerIds, setDeadPlayerIds] = useState<Set<string>>(new Set());
+  const [isSilentlyReconnecting, setIsSilentlyReconnecting] = useState(false);
 
   const socketRef = useRef<WebSocket | null>(null);
   const animationFrameId = useRef<number | null>(null);
@@ -146,17 +149,50 @@ export function useGameClient(): UseGameClientResult {
 
   const handleConnectRef = useRef<() => Promise<void>>(() => Promise.resolve());
   const reconnectToLobbyRef = useRef<() => Promise<void>>(() => Promise.resolve());
-  const scheduleReconnectRef = useRef<() => void>(() => {});
+  const scheduleReconnectRef = useRef<() => void>(() => { });
 
   const latestDirectionInputRef = useRef<Direction | null>(null);
   const lastSentDirectionRef = useRef<Direction | null>(null);
   const myCurrentDirectionRef = useRef<Direction | null>(null);
 
+  const silentReconnectingRef = useRef(false);
+  const inputQueueRef = useRef<Array<{ t: number; msg: object }>>([]);
+
   const sendWsMessage = useCallback((message: object) => {
-    if (socketRef.current?.readyState === WebSocket.OPEN) {
-      socketRef.current.send(JSON.stringify(message));
+    const sock = socketRef.current;
+    if (sock && sock.readyState === WebSocket.OPEN) {
+      sock.send(JSON.stringify(message));
+    } else {
+      // на случай короткого реконнекта — буферим последние 300мс команд
+      inputQueueRef.current.push({ t: performance.now(), msg: message });
+      // чистим старые
+      const cutoff = performance.now() - 300;
+      inputQueueRef.current = inputQueueRef.current.filter((x) => x.t >= cutoff);
     }
   }, []);
+
+  const scheduleSilentReconnect = useCallback(() => {
+    if (manualDisconnectRef.current || closingRef.current || unloadingRef.current) return;
+    if (reconnectTimerRef.current) return;
+
+    silentReconnectingRef.current = true;
+    setIsSilentlyReconnecting(true);
+
+    const attempt = (reconnectAttemptRef.current += 1);
+    const delay = Math.min(3200, 200 * Math.pow(2, attempt - 1));
+    reconnectTimerRef.current = window.setTimeout(async () => {
+      reconnectTimerRef.current = null;
+      try {
+        if (token && playerId && nickname.trim()) {
+          await reconnectToLobbyRef.current(); // НЕ трогаем lastLobbyId
+        } else {
+          await handleConnectRef.current();
+        }
+      } catch {
+        scheduleSilentReconnect(); // повтор
+      }
+    }, delay) as unknown as number;
+  }, [nickname, playerId, token]);
 
   const handleUsePowerUp = useCallback(
     (slot: number) => {
@@ -213,7 +249,10 @@ export function useGameClient(): UseGameClientResult {
   const reconnectToLobby = useCallback(async () => {
     if (connectingRef.current) return;
     connectingRef.current = true;
-    setStatus('connecting');
+
+    if (!silentReconnectingRef.current) {
+      setStatus('connecting'); // <-- только для обычного (несilent) пути
+    }
     setError(null);
 
     try {
@@ -246,16 +285,25 @@ export function useGameClient(): UseGameClientResult {
           clearTimeout(reconnectTimerRef.current);
           reconnectTimerRef.current = null;
         }
-        setStatus('connected');
+        const queued = inputQueueRef.current;
+        inputQueueRef.current = [];
+        for (const it of queued) {
+          try { socket.send(JSON.stringify(it.msg)); } catch { /* ignore */ }
+        }
+
         connectingRef.current = false;
         manualDisconnectRef.current = false;
         reconnectAttemptRef.current = 0;
-        soundManager.play('connect');
+        if (!silentReconnectingRef.current) soundManager.play('connect');
+        silentReconnectingRef.current = false;
+        setIsSilentlyReconnecting(false);
+
+        setStatus('connected');
       };
 
       socket.onmessage = (event) => {
-        if (event.data === 'ping' && socketRef.current?.readyState === WebSocket.OPEN) {
-          socketRef.current.send('pong');
+        if (event.data === 'h' && socketRef.current?.readyState === WebSocket.OPEN) {
+          socketRef.current.send('H');
           return;
         }
 
@@ -335,28 +383,33 @@ export function useGameClient(): UseGameClientResult {
 
         if (event.code === 4000) return;
 
-        scheduleReconnectRef.current();
-        setStatus('disconnected');
+        scheduleSilentReconnect();
       };
 
       socket.onerror = (event) => {
         cleanupSocketLock();
         if (manualDisconnectRef.current || closingRef.current || unloadingRef.current) return;
 
-        scheduleReconnectRef.current();
-        setError('Connection error.');
-        setStatus('disconnected');
+        scheduleSilentReconnect();
         connectingRef.current = false;
-        console.warn('WS error (reconnect)', event);
+
+        console.warn('WS error (silent reconnect)', event);
       };
     } catch (err) {
       cleanupSocketLock();
       connectingRef.current = false;
+
+      // если это silent-путь — тоже не дёргаем статус, просто эскалируем повтор
+      if (silentReconnectingRef.current) {
+        scheduleSilentReconnect();
+        return;
+      }
+
       setStatus('disconnected');
       setError(err instanceof Error ? err.message : 'Reconnection failed.');
       throw err;
     }
-  }, [cleanupSocketLock, mode, nickname, token]);
+  }, [cleanupSocketLock, mode, nickname, token, scheduleSilentReconnect]);
 
   const handleConnect = useCallback(async () => {
     if (connectingRef.current) return;
@@ -463,8 +516,8 @@ export function useGameClient(): UseGameClientResult {
       };
 
       socket.onmessage = (event) => {
-        if (event.data === 'ping' && socketRef.current?.readyState === WebSocket.OPEN) {
-          socketRef.current.send('pong');
+        if (event.data === 'h' && socketRef.current?.readyState === WebSocket.OPEN) {
+          socketRef.current.send('H');
           return;
         }
 
@@ -545,8 +598,7 @@ export function useGameClient(): UseGameClientResult {
 
         if (event.code === 4000) return;
 
-        scheduleReconnectRef.current();
-        setStatus('disconnected');
+        scheduleSilentReconnect();
       };
 
       socket.onerror = (event) => {
@@ -706,6 +758,32 @@ export function useGameClient(): UseGameClientResult {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [handleUsePowerUp]);
 
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') {
+        try { socketRef.current?.send('H'); } catch { }
+        // если мы в «тихом» режиме — дёрнем реконнект немедленно
+        if (silentReconnectingRef.current) {
+          if (reconnectTimerRef.current) {
+            clearTimeout(reconnectTimerRef.current);
+            reconnectTimerRef.current = null;
+          }
+          // немедленная попытка
+          (async () => {
+            try {
+              if (token && playerId && nickname.trim()) await reconnectToLobbyRef.current();
+              else await handleConnectRef.current();
+            } catch {
+              scheduleSilentReconnect();
+            }
+          })();
+        }
+      }
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
+  }, [nickname, playerId, token, scheduleSilentReconnect]);
+
   const gameLoop = useCallback(() => {
     const latestInput = latestDirectionInputRef.current;
     const actualDirection = myCurrentDirectionRef.current;
@@ -848,7 +926,6 @@ export function useGameClient(): UseGameClientResult {
     handleDisconnect,
     handleSwitchTeam,
     handleUsePowerUp,
+    isSilentlyReconnecting,
   };
 }
-
-
