@@ -6,7 +6,8 @@
 
 import { useEffect, useRef } from 'react';
 import type { GameState, GameOverInfo } from '@/features/game/types';
-import { CanvasRenderer, type VFX } from '@/features/game/canvas/CanvasRenderer';
+import { CanvasRenderer } from '@/features/game/canvas/CanvasRenderer';
+import type { VFX } from '@/features/game/canvas/types';
 import { calculateCanvasSize } from '@/features/game/lib/canvasMetrics';
 
 interface GameCanvasProps {
