@@ -100,16 +100,16 @@ function BlockingErrorModal({
 export default function PlayPage() {
   const router = useRouter();
   const [modeFromParams, setModeFromParams] = useState<GameModeKey>("free_for_all");
+  const [modeReady, setModeReady] = useState(false);
 
   useEffect(() => {
     // Комментарий по сути: этот код выполнится только на клиенте после гидратации.
     // При статическом пререндере window недоступен, поэтому дефолт останется "free_for_all".
     try {
-      const search = window.location.search;
-      const mode = new URLSearchParams(search).get("mode");
+      const mode = new URLSearchParams(window.location.search).get("mode");
       setModeFromParams(resolveMode(mode));
-    } catch {
-      setModeFromParams("free_for_all");
+    } finally {
+      setModeReady(true); // ← сигнал: параметр считан/нормализован
     }
   }, []);
 
@@ -131,6 +131,7 @@ export default function PlayPage() {
     isSilentlyReconnecting,
     handleConnect,
     handleDisconnect,
+    handleLeave,
     handleSwitchTeam,
     handleUsePowerUp,
     authBlockedReason,
@@ -152,15 +153,18 @@ export default function PlayPage() {
   // === Автоконнект: НЕ запускаем, если есть auth-блок ===
   useEffect(() => {
     const trimmed = nickname.trim();
-    if (
+    const canAuto =
+      modeReady &&               // ← ждём, пока URL распарсится
+      mode === modeFromParams && // ← ждём, пока useGameClient синхронизируется
       status === "disconnected" &&
       trimmed.length >= 3 &&
       !isLocked &&
-      !authBlockedReason // ← ключевой стоппер
-    ) {
+      !authBlockedReason;
+
+    if (canAuto) {
       handleConnect();
     }
-  }, [authBlockedReason, handleConnect, isLocked, nickname, status]);
+  }, [authBlockedReason, handleConnect, isLocked, nickname, status, modeReady, mode, modeFromParams]);
 
   // Синхронизация режима из URL (без UI выбора режима)
   useEffect(() => {
@@ -201,11 +205,10 @@ export default function PlayPage() {
               ? "Connecting…"
               : "Reconnecting…";
 
-  const handleQuit = useCallback(() => {
-    handleDisconnect();
-
-    router.replace("/main");
-  }, [handleDisconnect, router]);
+  const handleQuit = useCallback(async () => {
+    await handleLeave();      // уведомляем сервер + чистим локально
+    router.replace("/main");  // возвращаем на меню
+  }, [handleLeave, router]);
 
   return (
     <main className="relative flex flex-col items-center justify-start min-h-screen p-4 md:p-8">

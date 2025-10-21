@@ -38,6 +38,7 @@ export function useGameClient(initialMode: GameModeKey = 'free_for_all'): GameCl
     sendMessage,
     handleConnect,
     handleDisconnect,
+    handleLeave,
     authBlockedReason,
     clearAuthBlock,
   } = useGameConnection({
@@ -154,6 +155,7 @@ export function useGameClient(initialMode: GameModeKey = 'free_for_all'): GameCl
     vfx,
     handleConnect,
     handleDisconnect,
+    handleLeave,
     handleSwitchTeam,
     handleUsePowerUp,
     isSilentlyReconnecting,

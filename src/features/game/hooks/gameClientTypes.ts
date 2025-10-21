@@ -25,6 +25,7 @@ export interface GameClientResult {
   vfx: VFX[];
   handleConnect: () => Promise<void>;
   handleDisconnect: () => void;
+  handleLeave: () => Promise<void>;
   handleSwitchTeam: (teamId: TeamId) => void;
   handleUsePowerUp: (slot: number) => void;
   isSilentlyReconnecting: boolean;

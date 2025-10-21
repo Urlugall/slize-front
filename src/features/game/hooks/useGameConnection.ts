@@ -95,6 +95,7 @@ export interface UseGameConnectionResult {
   sendMessage: (message: object) => void;
   handleConnect: () => Promise<void>;
   handleDisconnect: () => void;
+  handleLeave: () => Promise<void>;
   authBlockedReason: 'nickname_in_use' | null;
   clearAuthBlock: () => void;
 }
@@ -201,6 +202,7 @@ export function useGameConnection({
 
     const attempt = (reconnectAttemptRef.current += 1);
     const delay = Math.min(3200, 200 * Math.pow(2, attempt - 1));
+
     reconnectTimerRef.current = window.setTimeout(async () => {
       reconnectTimerRef.current = null;
       try {
@@ -283,12 +285,13 @@ export function useGameConnection({
 
         // Определяем, был ли это "мягкий" обрыв (таймаут или аномалия)
         const isNetworkDrop = event.code === 1006 || event.code === 4002;
-        const canSilent = isSilentReconnect || canAttemptSilentReconnect();
+        const canSilent =
+          isSilentReconnect ||
+          Boolean((token ?? sessionStorage.getItem('slize_token')) &&
+            (playerId ?? sessionStorage.getItem('slize_playerId')) &&
+            nickname.trim());
 
         if (isNetworkDrop && canSilent) {
-          // *** ЭТО ГЛАВНЫЙ ФИКС ***
-          // Не ждем 200мс, а пытаемся СЕЙЧАС ЖЕ (0мс)
-          console.log('Network drop, attempting IMMEDIATE silent reconnect...');
           silentReconnectingRef.current = true;
           setIsSilentlyReconnecting(true);
 
@@ -299,11 +302,9 @@ export function useGameConnection({
 
           (async () => {
             try {
-              // reconnectInProgressRef.current — это и есть `reconnectToLobby`
-              await reconnectInProgressRef.current();
+              await reconnectInProgressRef.current(); // мгновенная попытка
             } catch (err) {
-              // Если мгновенная попытка провалилась, *тогда* запускаем таймер
-              console.warn('Immediate reconnect failed, scheduling backoff.', err);
+              // если не вышло — включаем обычный «тихий» backoff
               scheduleSilentReconnect();
             }
           })();
@@ -633,6 +634,51 @@ export function useGameConnection({
     setStatus, setError, setIsLocked, setToken, setPlayerId, setAuthBlockedReason
   ]);
 
+  const handleLeave = useCallback(async () => {
+    // 1) Пытаемся уведомить сервер через WS
+    const ws = socketRef.current;
+    try {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ action: 'leave' }));
+        // маленький grace-период, чтобы сообщение успело уйти
+        await new Promise((r) => setTimeout(r, 100));
+      }
+    } catch { /* ignore */ }
+
+    // 2) (опционально) дернуть REST, если WS уже закрыт и есть лобби
+    try {
+      const authToken = token ?? sessionStorage.getItem('slize_token');
+      const lobbyId = lastLobbyIdRef.current;
+      if (authToken && lobbyId) {
+        // не блокируем UX, но сообщим серверу
+        fetch(`${process.env.NEXT_PUBLIC_API_URL}/lobbies/${lobbyId}/leave`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${authToken}` },
+          keepalive: true, // чтобы доехал даже при навигации
+        }).catch(() => { });
+      }
+    } catch { /* ignore */ }
+
+    // 3) Локально закрываем соединение и чистим состояние
+    manualDisconnectRef.current = true;
+    closingRef.current = true;
+    if (reconnectTimerRef.current) {
+      clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+    }
+    try { socketRef.current?.close(1000, 'Client leave'); } catch { }
+    releaseResourcesAfterClose();
+    resetState();
+    setStatus('disconnected');
+    setError(null);
+    silentReconnectingRef.current = false;
+    setIsSilentlyReconnecting(false);
+    setPlayerId(null);
+    onPlayerIdChange?.(null);
+    lastLobbyIdRef.current = null; // <- больше не пытаемся вернуться в старое лобби
+  }, [onPlayerIdChange, releaseResourcesAfterClose, resetState, token, setPlayerId, setError, setStatus]);
+
+
   useEffect(() => {
     connectRef.current = handleConnect;
   }, [handleConnect]);
@@ -762,6 +808,7 @@ export function useGameConnection({
     sendMessage,
     handleConnect,
     handleDisconnect,
+    handleLeave,
     authBlockedReason,
     clearAuthBlock,
   };

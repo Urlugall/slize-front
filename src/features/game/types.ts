@@ -86,7 +86,8 @@ export interface GameState {
 export type ClientMessage =
   | { action: 'turn'; direction: 'up' | 'down' | 'left' | 'right' }
   | { action: 'use_powerup'; slot: number }
-  | { action: 'switch_team'; teamId: TeamId };
+  | { action: 'switch_team'; teamId: TeamId }
+  | { action: 'leave' };
 
 // Сервер (добавляем 'team_switched' и 'team_switch_denied')
 export type ServerMessage =
