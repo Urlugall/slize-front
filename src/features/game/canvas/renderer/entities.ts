@@ -1,4 +1,4 @@
-import { COLORS, PROJECTILES } from '@/features/game/config';
+import { COLORS, GAME_TIMING, PROJECTILES } from '@/features/game/config';
 import { drawPowerUpGlyph, POWERUP_CANVAS_GLYPH } from '@/features/game/icons';
 import { lerp } from '@/features/game/lib/math';
 import type { Metrics } from '@/features/game/canvas/renderer/metrics';
@@ -199,8 +199,16 @@ export const drawSnakes = ({
 
       const startX = prevSegment?.x ?? segment.x;
       const startY = prevSegment?.y ?? segment.y;
-      const x = lerp(startX, segment.x, interpolation) * metrics.cellSize;
-      const y = lerp(startY, segment.y, interpolation) * metrics.cellSize;
+      let x = lerp(startX, segment.x, interpolation) * metrics.cellSize;
+      let y = lerp(startY, segment.y, interpolation) * metrics.cellSize;
+
+      // лёгкий «наклон» головы для собственной змейки
+      if (index === 0 && isMe && !isDead) {
+        const boost = Math.min(1, elapsedSinceState / GAME_TIMING.serverTickRate);
+        const headNudge = 0.25 * boost * metrics.cellSize; // до 25% клетки
+        if (segment.x !== startX) x += Math.sign(segment.x - startX) * headNudge;
+        if (segment.y !== startY) y += Math.sign(segment.y - startY) * headNudge;
+      }
 
       if (hasSpeed) {
         ctx.save();
