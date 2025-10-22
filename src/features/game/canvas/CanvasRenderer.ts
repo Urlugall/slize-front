@@ -106,8 +106,9 @@ export class CanvasRenderer {
         ctx.translate(-cx, -cy);
 
         // Временной интерполяционный коэффициент для движущихся объектов
+        const elapsedSinceState = Math.max(0, now - this.lastStateTimestamp);
         const interpolation = Math.min(
-            Math.max((now - this.lastStateTimestamp) / GAME_TIMING.serverTickRate, 0),
+            Math.max(elapsedSinceState / GAME_TIMING.serverTickRate, 0),
             1,
         );
 
@@ -127,6 +128,7 @@ export class CanvasRenderer {
             playerId: this.playerId,
             deadIds: this.deadIds,
             interpolation,
+            elapsedSinceState,
         });
         drawNicknames(ctx, metrics, this.currentState, this.previousState, interpolation, this.nameCache);
         drawVfx(ctx, metrics, this.vfx);

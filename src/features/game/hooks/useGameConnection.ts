@@ -122,6 +122,7 @@ export function useGameConnection({
   const unloadingRef = useRef(false);
   const reconnectTimerRef = useRef<number | null>(null);
   const reconnectAttemptRef = useRef(0);
+  const beforeUnloadTeardownRef = useRef<(() => void) | null>(null);
   const lockIdRef = useRef<string>(crypto.randomUUID());
   const lastLobbyIdRef = useRef<string | null>(null);
   const silentReconnectingRef = useRef(false);
@@ -221,6 +222,8 @@ export function useGameConnection({
     socketRef.current = null;
     connectingRef.current = false;
     cleanupSocketLock();
+    try { beforeUnloadTeardownRef.current?.(); } catch { /* noop */ }
+    beforeUnloadTeardownRef.current = null;
   }, [cleanupSocketLock]);
 
   const setTemporaryError = useCallback((message: string) => {
@@ -352,6 +355,8 @@ export function useGameConnection({
       clearTimeout(reconnectTimerRef.current);
       reconnectTimerRef.current = null;
     }
+    try { beforeUnloadTeardownRef.current?.(); } catch { /* noop */ }
+    beforeUnloadTeardownRef.current = null;
     if (socketRef.current) {
       try {
         socketRef.current.close(1001, 'User initiated disconnect');
@@ -368,6 +373,8 @@ export function useGameConnection({
     setPlayerId(null);
     setToken(null);
     onPlayerIdChange?.(null);
+    // при ручном дисконнекте не пытаемся вернуться в прежнее лобби
+    try { lastLobbyIdRef.current = null; } catch { /* noop */ }
   }, [cleanupSocketLock, onPlayerIdChange, resetState]);
 
   const reconnectToLobby = useCallback(async () => {
@@ -555,66 +562,19 @@ export function useGameConnection({
       const socket = new WebSocket(wsUrl);
       socketRef.current = socket;
 
+      // регистрируем единый beforeunload и сохраняем его «съёмник» в ref
       const onBeforeUnload = () => {
         unloadingRef.current = true;
         closingRef.current = true;
-        try {
-          socket.close(1001, 'Page unloading');
-        } catch {
-          /* noop */
-        }
+        try { socket.close(1001, 'Page unloading'); } catch { /* noop */ }
       };
       window.addEventListener('beforeunload', onBeforeUnload);
-
-      const teardown = () => {
+      beforeUnloadTeardownRef.current = () => {
         window.removeEventListener('beforeunload', onBeforeUnload);
       };
 
-      const messageHandler = createSocketMessageHandler(socketRef, {
-        onState: callbacks.onStateMessage,
-        onGameOver: callbacks.onGameOver,
-        onPlayerDied: callbacks.onPlayerDied,
-        onTeamSwitchDenied: setTemporaryError,
-        onTeamSwitched: () => soundManager.play('connect'),
-      });
-
-      socket.onopen = () => {
-        if (reconnectTimerRef.current) {
-          clearTimeout(reconnectTimerRef.current);
-          reconnectTimerRef.current = null;
-        }
-        setStatus('connected');
-        connectingRef.current = false;
-        manualDisconnectRef.current = false;
-        reconnectAttemptRef.current = 0;
-        soundManager.play('connect');
-      };
-
-      socket.onmessage = messageHandler;
-
-      socket.onclose = (event) => {
-        teardown();
-        releaseResourcesAfterClose();
-
-        if (manualDisconnectRef.current || closingRef.current || unloadingRef.current) {
-          manualDisconnectRef.current = false;
-          return;
-        }
-
-        if (event.code === 4000) return;
-        scheduleReconnect();
-      };
-
-      socket.onerror = (event) => {
-        teardown();
-        releaseResourcesAfterClose();
-        if (manualDisconnectRef.current || closingRef.current || unloadingRef.current) return;
-
-        scheduleReconnect();
-        setError('Connection error.');
-        setStatus('disconnected');
-        console.warn('WS error', event);
-      };
+      // единообразные хендлеры
+      attachHandlers(socket, { isSilentReconnect: false });
     } catch (err) {
       console.error("Connection process failed:", err);
 
@@ -666,7 +626,19 @@ export function useGameConnection({
       clearTimeout(reconnectTimerRef.current);
       reconnectTimerRef.current = null;
     }
-    try { socketRef.current?.close(1000, 'Client leave'); } catch { }
+    try { beforeUnloadTeardownRef.current?.(); } catch { /* noop */ }
+    beforeUnloadTeardownRef.current = null;
+    try {
+      const ws = socketRef.current;
+      if (ws) {
+        const closed = new Promise<void>((res) => {
+          const t = setTimeout(res, 250);
+          ws.addEventListener('close', () => { clearTimeout(t); res(); }, { once: true });
+        });
+        ws.close(1000, 'Client leave');
+        await closed;
+      }
+    } catch { /* noop */ }
     releaseResourcesAfterClose();
     resetState();
     setStatus('disconnected');

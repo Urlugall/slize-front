@@ -101,6 +101,7 @@ export default function PlayPage() {
   const router = useRouter();
   const [modeFromParams, setModeFromParams] = useState<GameModeKey>("free_for_all");
   const [modeReady, setModeReady] = useState(false);
+  const [isQuitting, setIsQuitting] = useState(false);
 
   useEffect(() => {
     // Комментарий по сути: этот код выполнится только на клиенте после гидратации.
@@ -159,12 +160,13 @@ export default function PlayPage() {
       status === "disconnected" &&
       trimmed.length >= 3 &&
       !isLocked &&
-      !authBlockedReason;
+      !authBlockedReason &&
+      !isQuitting;
 
     if (canAuto) {
       handleConnect();
     }
-  }, [authBlockedReason, handleConnect, isLocked, nickname, status, modeReady, mode, modeFromParams]);
+  }, [authBlockedReason, handleConnect, isLocked, nickname, status, modeReady, mode, modeFromParams, isQuitting]);
 
   // Синхронизация режима из URL (без UI выбора режима)
   useEffect(() => {
@@ -206,6 +208,7 @@ export default function PlayPage() {
               : "Reconnecting…";
 
   const handleQuit = useCallback(async () => {
+    setIsQuitting(true);      // стоп любым автоподключениям
     await handleLeave();      // уведомляем сервер + чистим локально
     router.replace("/main");  // возвращаем на меню
   }, [handleLeave, router]);

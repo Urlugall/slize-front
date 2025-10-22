@@ -150,6 +150,7 @@ interface DrawSnakesOptions {
   playerId: string | null;
   deadIds: Set<string>;
   interpolation: number;
+  elapsedSinceState: number;
 }
 
 export const drawSnakes = ({
@@ -160,12 +161,14 @@ export const drawSnakes = ({
   playerId,
   deadIds,
   interpolation,
+  elapsedSinceState,
 }: DrawSnakesOptions) => {
   for (const snake of current.snakes) {
     const prevSnake = previous?.snakes.find((item) => item.id === snake.id);
     const info = current.players[snake.id];
     const isMe = snake.id === playerId;
-    const isGhost = info?.activeEffects.isGhostUntil > Date.now();
+    const remainingGhostMs = (info?.activeEffects.isGhostUntil ?? 0) - elapsedSinceState;
+    const isGhost = remainingGhostMs > 0;
     const isDead = deadIds.has(snake.id);
     const hasSpeed = info?.activeEffects.speedBoostUntil > Date.now();
     const teamId = info?.teamId;
