@@ -1,14 +1,14 @@
 // src/app/main/play/page.tsx
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { GameCanvas } from "@/features/game/components/GameCanvas";
 import { PowerUpBar } from "@/features/game/components/PowerUpBar";
 import { TeamPanel } from "@/features/game/components/TeamPanel";
 import { useGameClient } from "@/features/game/hooks/useGameClient";
-import { GAME_TIMING, NET_SMOOTHING } from "@/features/game/config";
+import { GAME_TIMING } from "@/features/game/config";
 import type { GameModeKey } from "@/features/game/types";
 
 const SUPPORTED_MODES: GameModeKey[] = ["free_for_all", "team_battle"];
@@ -213,20 +213,6 @@ export default function PlayPage() {
     router.replace("/main");  // возвращаем на меню
   }, [handleLeave, router]);
 
-  const snapshots = useMemo(() => {
-    const arr: Array<{ t: number; state: NonNullable<typeof currentState> }> = [];
-    if (currentState) arr.push({ t: lastStateTimestamp, state: currentState });
-    if (previousState) {
-      arr.unshift({
-        t: Math.max(0, lastStateTimestamp - GAME_TIMING.serverTickRate),
-        state: previousState,
-      });
-    }
-    return arr;
-  }, [previousState, currentState, lastStateTimestamp]);
-
-  const interpDelayMs = NET_SMOOTHING?.interpBaseMs ?? 120;
-
   return (
     <main className="relative flex flex-col items-center justify-start min-h-screen p-4 md:p-8">
       <h1
@@ -265,8 +251,8 @@ export default function PlayPage() {
         {/* Центр — канвас */}
         <div className="order-3 xl:order-2 flex-shrink-0 flex justify-center w-full">
           <GameCanvas
-            snapshots={snapshots}
-            interpDelayMs={interpDelayMs}
+            previousState={previousState}
+            currentState={currentState}
             lastStateTimestamp={lastStateTimestamp}
             playerId={playerId}
             deadPlayerIds={deadPlayerIds}

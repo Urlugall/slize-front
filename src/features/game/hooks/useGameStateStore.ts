@@ -5,7 +5,6 @@ import type { GameOverInfo, GameState } from '@/features/game/types';
 import { soundManager } from '@/features/game/lib/SoundManager';
 import { findPlayerDirection, type Direction } from '@/features/game/lib/client/direction';
 import type { VFX } from '@/features/game/canvas/types';
-import { GAME_TIMING, NET_SMOOTHING } from '@/features/game/config';
 
 interface UseGameStateStoreParams {
   playerId: string | null;
@@ -20,8 +19,6 @@ export interface GameStateStore {
   previousState: GameState | null;
   currentState: GameState | null;
   lastStateTimestamp: number;
-  snapshots: Array<{ t: number; state: GameState }>;
-  interpDelayMs: number;
   gameOverInfo: GameOverInfo | null;
   deadPlayerIds: Set<string>;
   vfx: VFX[];
@@ -49,11 +46,6 @@ export function useGameStateStore({ playerId }: UseGameStateStoreParams): GameSt
   const myCurrentDirectionRef = useRef<Direction | null>(null);
   const lastSentDirectionRef = useRef<Direction | null>(null);
 
-  const [snapshots, setSnapshots] = useState<Array<{ t: number; state: GameState }>>([]);
-  const lastInterArrivalRef = useRef<number | null>(null);
-  const jitterEmaRef = useRef(0);
-  const [interpDelayMs, setInterpDelayMs] = useState<number>(NET_SMOOTHING.interpBaseMs);
-
   useEffect(() => {
     currentStateRef.current = currentState;
   }, [currentState]);
@@ -76,7 +68,6 @@ export function useGameStateStore({ playerId }: UseGameStateStoreParams): GameSt
 
   const handleStateMessage = useCallback(
     ({ state, receivedAt }: HandleStateParams) => {
-      // 1) обновляем "традиционные" поля
       setCurrentState((prev) => {
         setPreviousState(prev);
         previousStateForEffectsRef.current = prev;
@@ -84,31 +75,6 @@ export function useGameStateStore({ playerId }: UseGameStateStoreParams): GameSt
         return state;
       });
       setLastStateTimestamp(receivedAt);
-
-      // 2) пушим в буфер
-      setSnapshots((prev) => {
-        const next = [...prev, { t: receivedAt, state }];
-        if (next.length > NET_SMOOTHING.snapshotBuffer) next.shift();
-        return next;
-      });
-
-      // 3) оцениваем джиттер межпакетных интервалов
-      const expected = GAME_TIMING.serverTickRate; // целимcя в 1 тик
-      const lastT = lastInterArrivalRef.current;
-      if (lastT != null) {
-        const ia = receivedAt - lastT; // inter-arrival
-        const dev = Math.abs(ia - expected);
-        jitterEmaRef.current =
-          (1 - NET_SMOOTHING.jitterAlpha) * jitterEmaRef.current +
-          NET_SMOOTHING.jitterAlpha * dev;
-        const adaptive =
-          NET_SMOOTHING.interpBaseMs +
-          NET_SMOOTHING.jitterFactor * jitterEmaRef.current;
-        setInterpDelayMs(
-          Math.max(NET_SMOOTHING.interpMinMs, Math.min(NET_SMOOTHING.interpMaxMs, adaptive)),
-        );
-      }
-      lastInterArrivalRef.current = receivedAt;
     },
     [],
   );
@@ -209,8 +175,6 @@ export function useGameStateStore({ playerId }: UseGameStateStoreParams): GameSt
     previousState,
     currentState,
     lastStateTimestamp,
-    snapshots,
-    interpDelayMs,
     gameOverInfo,
     deadPlayerIds,
     vfx,

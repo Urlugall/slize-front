@@ -105,12 +105,12 @@ export class CanvasRenderer {
         ctx.scale(scale, scale);
         ctx.translate(-cx, -cy);
 
-        const tB = this.lastStateTimestamp;
-        const tA = tB - GAME_TIMING.serverTickRate; // между пакетами у нас 1 тик
-        const target = now; // сюда прокинут performance.now() из GameCanvas уже «смещённый»
-        const elapsedSinceState = Math.max(0, target - tA);
-        const denom = Math.max(1, tB - tA);
-        const interpolation = Math.min(Math.max(elapsedSinceState / denom, 0), 1);
+        // Временной интерполяционный коэффициент для движущихся объектов
+        const elapsedSinceState = Math.max(0, now - this.lastStateTimestamp);
+        const interpolation = Math.min(
+            Math.max(elapsedSinceState / GAME_TIMING.serverTickRate, 0),
+            1,
+        );
 
         // Сетка — теперь «мгновенная», плавность даёт общий масштаб
         drawGridImmediate(ctx, metrics);

@@ -15,19 +15,6 @@ export const GAME_TIMING = {
   roundDurationMs: 3 * 60 * 1000,
 } as const;
 
-export const NET_SMOOTHING = {
-  // базовая задержка рендера (мс), чтобы рисовать "в прошлом"
-  interpBaseMs: 120,
-  interpMinMs: 80,
-  interpMaxMs: 220,
-  // доля EMA для оценки джиттера межпакетных интервалов
-  jitterAlpha: 0.25,
-  // насколько агрессивно учитывать джиттер
-  jitterFactor: 1.2,
-  // размер буфера снапшотов
-  snapshotBuffer: 40,
-} as const;
-
 export const PROJECTILES = {
   spawnLead: 0.6,
   radiusRatio: 0.35,

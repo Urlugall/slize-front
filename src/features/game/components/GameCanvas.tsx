@@ -11,8 +11,8 @@ import type { VFX } from '@/features/game/canvas/types';
 import { calculateCanvasSize } from '@/features/game/lib/canvasMetrics';
 
 interface GameCanvasProps {
-  snapshots: Array<{ t: number; state: GameState }>;
-  interpDelayMs: number;
+  previousState: GameState | null;
+  currentState: GameState | null;
   lastStateTimestamp: number;
   playerId: string | null;
   deadPlayerIds: Set<string>;
@@ -21,8 +21,8 @@ interface GameCanvasProps {
 }
 
 export function GameCanvas({
-  snapshots,
-  interpDelayMs,
+  previousState,
+  currentState,
   lastStateTimestamp,
   playerId,
   deadPlayerIds,
@@ -62,31 +62,9 @@ export function GameCanvas({
     };
   }, []);
 
-  // подсовываем рендереру пару снапшотов, обрамляющих target time
-  useEffect(() => {
-    const target = performance.now() - interpDelayMs;
-    let a: { t: number; state: GameState } | null = null;
-    let b: { t: number; state: GameState } | null = null;
-    // линейный поиск от конца (буфер маленький)
-    for (let i = snapshots.length - 1; i >= 0; i--) {
-      if (snapshots[i].t <= target) {
-        a = snapshots[i];
-        b = snapshots[i + 1] ?? snapshots[i]; // если нет бОльшего — дублируем
-        break;
-      }
-    }
-    // если target раньше всех — берём самый ранний
-    if (!a && snapshots.length) {
-      a = snapshots[0];
-      b = snapshots[1] ?? snapshots[0];
-    }
-    rendererRef.current?.setPreviousState(a?.state ?? null);
-    rendererRef.current?.setCurrentState(b?.state ?? null);
-    // Для интерполяции в CanvasRenderer используем "время b"
-    rendererRef.current?.setLastStateTimestamp(b?.t ?? 0);
-  }, [snapshots, interpDelayMs]);
-
   // Прокидываем новые снапшоты/refs в рендерер — без лишних перерисовок React
+  useEffect(() => { rendererRef.current?.setPreviousState(previousState); }, [previousState]);
+  useEffect(() => { rendererRef.current?.setCurrentState(currentState); }, [currentState]);
   useEffect(() => { rendererRef.current?.setLastStateTimestamp(lastStateTimestamp); }, [lastStateTimestamp]);
   useEffect(() => { rendererRef.current?.setPlayerId(playerId); }, [playerId]);
   useEffect(() => { rendererRef.current?.setDeadIds(deadPlayerIds); }, [deadPlayerIds]);
@@ -94,10 +72,7 @@ export function GameCanvas({
   useEffect(() => { rendererRef.current?.setGameOver(gameOver); }, [gameOver]);
 
   // Вычисляем CSS-размер по текущему gridSize (как раньше)
-  const latest = snapshots[snapshots.length - 1]?.state ?? null;
-  const before = snapshots[snapshots.length - 2]?.state ?? null;
-  const gridSizeForLayout = latest?.gridSize ?? before?.gridSize ?? null;
-  
+  const gridSizeForLayout = currentState?.gridSize ?? previousState?.gridSize ?? null;
   const cssSize =
     gridSizeForLayout && gridSizeForLayout > 0 ? calculateCanvasSize(gridSizeForLayout) : 0;
 
