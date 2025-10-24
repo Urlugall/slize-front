@@ -54,10 +54,10 @@ export const COLORS = {
     vfxExplosion: 'rgba(239,68,68,0.35)',
   },
   blocks: {
-    warning: 'rgba(244,63,94,0.14)',
-    pulse: 'rgba(244,63,94,0.22)',
+    warning: 'rgba(244, 63, 93, 0.46)',
+    pulse: 'rgba(244, 63, 93, 0.4)',
     kill: 'rgba(239,68,68,0.78)',
-    solid: 'rgba(15,23,42,0.12)',
+    solid: 'rgba(115, 15, 140, 0.55)',
   },
   powerUpBg: 'rgba(255,255,255,0.95)',
   powerUps: {
