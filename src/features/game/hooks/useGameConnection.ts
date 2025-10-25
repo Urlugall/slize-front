@@ -12,6 +12,11 @@ interface UseGameConnectionCallbacks {
   onStateMessage: GameStateStore['handleStateMessage'];
   onGameOver: GameStateStore['handleGameOver'];
   onPlayerDied: GameStateStore['handlePlayerDied'];
+  onPlayerList: GameStateStore['handlePlayerList'];
+  onPlayerJoined: GameStateStore['handlePlayerJoined'];
+  onPlayerLeft: GameStateStore['handlePlayerLeft'];
+  onScoreUpdate: GameStateStore['handleScoreUpdate'];
+  onPowerupUpdate: GameStateStore['handlePowerupUpdate'];
 }
 
 interface UseGameConnectionOptions {
@@ -26,6 +31,11 @@ interface SocketMessageHandlers {
   onState: UseGameConnectionCallbacks['onStateMessage'];
   onGameOver: (info: GameOverInfo) => void;
   onPlayerDied: (playerId: string) => void;
+  onPlayerList: UseGameConnectionCallbacks['onPlayerList'];
+  onPlayerJoined: UseGameConnectionCallbacks['onPlayerJoined'];
+  onPlayerLeft: UseGameConnectionCallbacks['onPlayerLeft'];
+  onScoreUpdate: UseGameConnectionCallbacks['onScoreUpdate'];
+  onPowerupUpdate: UseGameConnectionCallbacks['onPowerupUpdate'];
   onTeamSwitchDenied: (message: string) => void;
   onTeamSwitched: () => void;
 }
@@ -56,6 +66,21 @@ const createSocketMessageHandler =
           break;
         case 'player_died':
           handlers.onPlayerDied(message.payload.playerId);
+          break;
+        case 'player_list':
+          handlers.onPlayerList(message.payload);
+          break;
+        case 'player_joined':
+          handlers.onPlayerJoined(message.payload);
+          break;
+        case 'player_left':
+          handlers.onPlayerLeft(message.payload);
+          break;
+        case 'score_update':
+          handlers.onScoreUpdate(message.payload);
+          break;
+        case 'powerup_update':
+          handlers.onPowerupUpdate(message.payload);
           break;
         case 'team_switched':
           handlers.onTeamSwitched();
@@ -234,8 +259,8 @@ export function useGameConnection({
   const attachHandlers = useCallback(
     (socket: WebSocket, { isSilentReconnect }: { isSilentReconnect: boolean }) => {
       const canAttemptSilentReconnect = () => {
-        const storedToken = token ?? sessionStorage.getItem('slize_token');
-        const storedPlayerId = playerId ?? sessionStorage.getItem('slize_playerId');
+        const storedToken = token ?? localStorage.getItem('slize_token');
+        const storedPlayerId = playerId ?? localStorage.getItem('slize_playerId');
         return Boolean(storedToken && storedPlayerId && nickname.trim());
       };
 
@@ -243,6 +268,11 @@ export function useGameConnection({
         onState: callbacks.onStateMessage,
         onGameOver: callbacks.onGameOver,
         onPlayerDied: callbacks.onPlayerDied,
+        onPlayerList: callbacks.onPlayerList,
+        onPlayerJoined: callbacks.onPlayerJoined,
+        onPlayerLeft: callbacks.onPlayerLeft,
+        onScoreUpdate: callbacks.onScoreUpdate,
+        onPowerupUpdate: callbacks.onPowerupUpdate,
         onTeamSwitchDenied: setTemporaryError,
         onTeamSwitched: () => soundManager.play('connect'),
       });
@@ -290,8 +320,8 @@ export function useGameConnection({
         const isNetworkDrop = event.code === 1006 || event.code === 4002;
         const canSilent =
           isSilentReconnect ||
-          Boolean((token ?? sessionStorage.getItem('slize_token')) &&
-            (playerId ?? sessionStorage.getItem('slize_playerId')) &&
+          Boolean((token ?? localStorage.getItem('slize_token')) &&
+            (playerId ?? localStorage.getItem('slize_playerId')) &&
             nickname.trim());
 
         if (isNetworkDrop && canSilent) {
@@ -306,7 +336,7 @@ export function useGameConnection({
           (async () => {
             try {
               await reconnectInProgressRef.current(); // мгновенная попытка
-            } catch (err) {
+            } catch {
               // если не вышло — включаем обычный «тихий» backoff
               scheduleSilentReconnect();
             }
@@ -337,6 +367,11 @@ export function useGameConnection({
       callbacks.onGameOver,
       callbacks.onPlayerDied,
       callbacks.onStateMessage,
+      callbacks.onPlayerJoined,
+      callbacks.onPlayerLeft,
+      callbacks.onPlayerList,
+      callbacks.onPowerupUpdate,
+      callbacks.onScoreUpdate,
       flushInputQueue,
       releaseResourcesAfterClose,
       scheduleReconnect,
@@ -392,7 +427,7 @@ export function useGameConnection({
         const response = await fetch(
           `${process.env.NEXT_PUBLIC_API_URL}/lobbies/find-best?mode=${mode}`,
           {
-            headers: { Authorization: `Bearer ${sessionStorage.getItem('slize_token')}` },
+            headers: { Authorization: `Bearer ${localStorage.getItem('slize_token')}` },
           },
         );
         if (!response.ok) throw new Error('Could not find a lobby.');
@@ -401,7 +436,7 @@ export function useGameConnection({
         lastLobbyIdRef.current = lobbyId;
       }
 
-      const authToken = token ?? sessionStorage.getItem('slize_token');
+      const authToken = token ?? localStorage.getItem('slize_token');
       if (!authToken || !nickname.trim()) throw new Error('Missing session data.');
 
       const wsUrl = `${process.env.NEXT_PUBLIC_WS_URL}/lobbies/${lobbyId}/ws?token=${authToken}&nickname=${encodeURIComponent(
@@ -492,12 +527,12 @@ export function useGameConnection({
       }
 
       const authHeaders: HeadersInit = { 'Content-Type': 'application/json' };
-      const bearerToken = token ?? sessionStorage.getItem('slize_token');
+      const bearerToken = token ?? localStorage.getItem('slize_token');
       if (bearerToken) {
         authHeaders.Authorization = `Bearer ${bearerToken}`;
       }
 
-      const existingPlayerId = playerId ?? sessionStorage.getItem('slize_playerId') ?? undefined;
+      const existingPlayerId = playerId ?? localStorage.getItem('slize_playerId') ?? undefined;
       const authPayload: Record<string, unknown> = { nickname: nickname.trim() };
       if (existingPlayerId) {
         authPayload.playerId = existingPlayerId;
@@ -536,8 +571,8 @@ export function useGameConnection({
       onPlayerIdChange?.(newPlayerId);
 
       try {
-        sessionStorage.setItem('slize_token', authToken);
-        sessionStorage.setItem('slize_playerId', newPlayerId);
+        localStorage.setItem('slize_token', authToken);
+        localStorage.setItem('slize_playerId', newPlayerId);
         const nicknameToPersist = normalizedNickname ?? nickname.trim();
         localStorage.setItem('slize_nickname', nicknameToPersist);
       } catch {
@@ -607,7 +642,7 @@ export function useGameConnection({
 
     // 2) (опционально) дернуть REST, если WS уже закрыт и есть лобби
     try {
-      const authToken = token ?? sessionStorage.getItem('slize_token');
+      const authToken = token ?? localStorage.getItem('slize_token');
       const lobbyId = lastLobbyIdRef.current;
       if (authToken && lobbyId) {
         // не блокируем UX, но сообщим серверу

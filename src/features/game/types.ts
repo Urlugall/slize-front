@@ -80,6 +80,52 @@ export interface GameState {
   teams?: TeamState[] | null;
 }
 
+export interface HotSnake {
+  id: number;
+  body: { x: number; y: number }[];
+}
+
+export interface HotProjectileState extends Omit<ProjectileState, 'ownerId'> {
+  ownerId: number;
+}
+
+export interface HotGameState extends Omit<GameState, 'players' | 'snakes' | 'projectiles'> {
+  snakes: HotSnake[];
+  projectiles: HotProjectileState[];
+}
+
+export interface SlotAssignment {
+  slotId: number;
+  playerId: string;
+}
+
+export interface PlayerListPayload {
+  players: Record<string, PlayerInfo>;
+  slotAssignments: SlotAssignment[];
+}
+
+export interface ScoreUpdatePayload {
+  playerId: string;
+  score: number;
+}
+
+export interface PowerUpUpdatePayload {
+  playerId: string;
+  powerUpSlots: (PowerUpType | null)[];
+  activeEffects: PlayerInfo['activeEffects'];
+}
+
+export interface PlayerJoinedPayload {
+  playerId: string;
+  slotId: number;
+  player: PlayerInfo;
+}
+
+export interface PlayerLeftPayload {
+  playerId: string;
+  slotId: number;
+}
+
 // --- Client/Server Messages ---
 
 // Клиент (добавляем 'switch_team')
@@ -91,9 +137,12 @@ export type ClientMessage =
 
 // Сервер (добавляем 'team_switched' и 'team_switch_denied')
 export type ServerMessage =
-  | { type: 'state'; payload: GameState }
-  | { type: 'player_joined'; payload: { playerId: string; nickname: string } }
-  | { type: 'player_left'; payload: { playerId: string } }
+  | { type: 'state'; payload: HotGameState }
+  | { type: 'player_list'; payload: PlayerListPayload }
+  | { type: 'score_update'; payload: ScoreUpdatePayload }
+  | { type: 'powerup_update'; payload: PowerUpUpdatePayload }
+  | { type: 'player_joined'; payload: PlayerJoinedPayload }
+  | { type: 'player_left'; payload: PlayerLeftPayload }
   | { type: 'player_died'; payload: { playerId: string } }
   | { type: 'game_over'; payload: GameOverInfo }
   | { type: 'team_switched'; payload: { playerId: string; teamId: TeamId } }

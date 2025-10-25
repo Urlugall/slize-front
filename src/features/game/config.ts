@@ -54,10 +54,10 @@ export const COLORS = {
     vfxExplosion: 'rgba(239,68,68,0.35)',
   },
   blocks: {
-    warning: 'rgba(244, 63, 93, 0.46)',
-    pulse: 'rgba(244, 63, 93, 0.4)',
-    kill: 'rgba(239,68,68,0.78)',
-    solid: 'rgba(115, 15, 140, 0.55)',
+    warning: 'rgba(167, 139, 250, 0.9)', // violet-400 (Появление)
+    kill: 'rgba(235, 67, 21,0.9)',      // purple-700 (Активная опасность)
+    solid: 'rgba(19, 30, 55, 0.9)',       // slate-900 (Постоянная стена)
+    pulse: 'rgba(167, 139, 250, 1)',
   },
   powerUpBg: 'rgba(255,255,255,0.95)',
   powerUps: {

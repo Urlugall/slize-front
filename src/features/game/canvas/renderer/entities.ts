@@ -5,6 +5,8 @@ import type { Metrics } from '@/features/game/canvas/renderer/metrics';
 import { roundRect } from '@/features/game/canvas/renderer/metrics';
 import type { GameState, PowerUpType } from '@/features/game/types';
 
+const BLOCK_FADE_DURATION_MS = 300.0;
+
 const DIR = {
   up: { x: 0, y: -1 },
   down: { x: 0, y: 1 },
@@ -14,17 +16,53 @@ const DIR = {
 
 export const drawBlocks = (ctx: CanvasRenderingContext2D, metrics: Metrics, state: GameState) => {
   if (!state.blocks?.length) return;
+
+  const now = Date.now();
+
   for (const block of state.blocks) {
+    if (!block.state) continue;
+
+    if (now < block.activateAt) {
+      continue;
+    }
+
     const x = block.x * metrics.cellSize;
     const y = block.y * metrics.cellSize;
-    if (block.state === 'warning') {
-      const pulse = Math.abs(Math.sin(Date.now() / 320));
-      ctx.fillStyle = pulse > 0.5 ? COLORS.blocks.pulse : COLORS.blocks.warning;
-    } else if (block.state === 'kill') {
-      ctx.fillStyle = COLORS.blocks.kill;
-    } else {
-      ctx.fillStyle = COLORS.blocks.solid;
+    let baseOpacity = 1.0;
+    let color: string;
+
+    // 1. Определяем цвет и базовую прозрачность (логика остается прежней)
+    switch (block.state) {
+      case 'warning':
+        color = COLORS.blocks.warning;
+        const pulse = 0.5 + Math.abs(Math.sin(now / 320)) * 0.5;
+        baseOpacity = pulse * 0.55;
+        break;
+      case 'kill':
+        color = COLORS.blocks.kill;
+        baseOpacity = 0.7;
+        break;
+      case 'solid':
+        color = COLORS.blocks.solid;
+        baseOpacity = 0.9;
+        break;
+      default:
+        continue; // Пропускаем неизвестные состояния
     }
+
+    // 2. "Естественное исчезновение" — ТОЛЬКО для временных блоков
+    if (block.state !== 'solid' && block.expireAt) {
+      const remaining = block.expireAt - now;
+      if (remaining < BLOCK_FADE_DURATION_MS) {
+        const fadeProgress = Math.max(0, remaining / BLOCK_FADE_DURATION_MS);
+        baseOpacity *= fadeProgress;
+      }
+    }
+
+    // 3. Отрисовка
+    ctx.save();
+    ctx.globalAlpha = baseOpacity;
+    ctx.fillStyle = color;
 
     roundRect(
       ctx,
@@ -35,6 +73,7 @@ export const drawBlocks = (ctx: CanvasRenderingContext2D, metrics: Metrics, stat
       Math.max(2, metrics.cellSize * 0.12),
     );
     ctx.fill();
+    ctx.restore();
   }
 };
 
@@ -150,7 +189,7 @@ interface DrawSnakesOptions {
   playerId: string | null;
   deadIds: Set<string>;
   interpolation: number;
-  elapsedSinceState: number;
+  now: number;
 }
 
 export const drawSnakes = ({
@@ -161,16 +200,15 @@ export const drawSnakes = ({
   playerId,
   deadIds,
   interpolation,
-  elapsedSinceState,
+  now,
 }: DrawSnakesOptions) => {
   for (const snake of current.snakes) {
     const prevSnake = previous?.snakes.find((item) => item.id === snake.id);
     const info = current.players[snake.id];
     const isMe = snake.id === playerId;
-    const remainingGhostMs = (info?.activeEffects.isGhostUntil ?? 0) - elapsedSinceState;
-    const isGhost = remainingGhostMs > 0;
+    const isGhost = (info?.activeEffects.isGhostUntil ?? 0) > now;
+    const hasSpeed = (info?.activeEffects.speedBoostUntil ?? 0) > now;
     const isDead = deadIds.has(snake.id);
-    const hasSpeed = info?.activeEffects.speedBoostUntil > Date.now();
     const teamId = info?.teamId;
 
     let baseColor: string;

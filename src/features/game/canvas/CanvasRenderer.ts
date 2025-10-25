@@ -67,7 +67,9 @@ export class CanvasRenderer {
         this.gameOverInfo = info;
     }
 
-    draw(now: number) {
+    draw(rafTimestamp: number) { // 'rafTimestamp' is performance.now() from requestAnimationFrame
+        const now = Date.now();
+        
         if (!this.currentState) return;
         const metrics = resolveMetrics(this.currentState.gridSize);
         if (!metrics) return;
@@ -106,7 +108,7 @@ export class CanvasRenderer {
         ctx.translate(-cx, -cy);
 
         // Временной интерполяционный коэффициент для движущихся объектов
-        const elapsedSinceState = Math.max(0, now - this.lastStateTimestamp);
+        const elapsedSinceState = Math.max(0, rafTimestamp - this.lastStateTimestamp);
         const interpolation = Math.min(
             Math.max(elapsedSinceState / GAME_TIMING.serverTickRate, 0),
             1,
@@ -128,7 +130,7 @@ export class CanvasRenderer {
             playerId: this.playerId,
             deadIds: this.deadIds,
             interpolation,
-            elapsedSinceState,
+            now,
         });
         drawNicknames(ctx, metrics, this.currentState, this.previousState, interpolation, this.nameCache);
         drawVfx(ctx, metrics, this.vfx);
