@@ -4,6 +4,8 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 
+import { LobbyListButton } from "@/features/game/components/LobbyListButton";
+
 const MODES = [
   {
     key: "free_for_all",
@@ -65,34 +67,39 @@ export default function MainLandingPage() {
             className="w-full p-3 rounded bg-gray-50 border border-gray-300 text-foreground focus:outline-none focus:ring-2 focus:ring-[var(--accent-hover)] transition shadow-inner"
           />
           <p className="mt-2 text-xs text-gray-500">
-            Min 3 characters. Saved locally.
+            Min 3 characters
           </p>
         </div>
 
         {/* Выбор режима */}
         <div className="grid gap-6 md:grid-cols-2 w-full">
-          {MODES.map((m) => (
-            <button
-              key={m.key}
-              onClick={() => setMode(m.key)}
-              className={`flex flex-col gap-4 rounded-2xl border p-6 text-left transition hover:shadow-xl ${mode === m.key
-                  ? "border-[var(--accent)] bg-white"
-                  : "border-gray-200 bg-white/70 hover:border-[var(--accent)]"
-                }`}
-            >
-              <div className="flex items-center justify-between">
-                <h2 className="text-2xl font-semibold text-[var(--foreground)]">
-                  {m.title}
-                </h2>
-                <span className="text-sm font-mono uppercase tracking-widest text-[var(--accent)]">
-                  {mode === m.key ? "Selected" : "Select"}
-                </span>
+          {MODES.map((m) => {
+            const isSelected = mode === m.key;
+            return (
+              <div key={m.key} className="relative">
+                <button
+                  onClick={() => setMode(m.key)}
+                  className={`flex w-full flex-col gap-4 rounded-2xl border p-6 text-left transition hover:shadow-xl ${isSelected
+                    ? "border-[var(--accent)] bg-white"
+                    : "border-gray-200 bg-white/70 hover:border-[var(--accent)]"
+                    }`}
+                >
+                  <div className="flex items-center justify-between">
+                    <h2 className="text-2xl font-semibold text-[var(--foreground)]">
+                      {m.title}
+                    </h2>
+                    <span className="text-sm font-mono uppercase tracking-widest text-[var(--accent)]">
+                      {isSelected ? "Selected" : "Select"}
+                    </span>
+                  </div>
+                  <p className="text-sm leading-relaxed text-muted-foreground">
+                    {m.description}
+                  </p>
+                </button>
+                <LobbyListButton mode={m.key} />
               </div>
-              <p className="text-sm text-muted-foreground leading-relaxed">
-                {m.description}
-              </p>
-            </button>
-          ))}
+            );
+          })}
         </div>
 
         {/* Старт — ведём в /main/play?mode=... */}

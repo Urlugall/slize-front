@@ -23,6 +23,8 @@ export interface GameClientResult {
   gameOverInfo: GameOverInfo | null;
   deadPlayerIds: Set<string>;
   vfx: VFX[];
+  lobbyId: string | null;
+  lobbyName: string | null;
   handleConnect: () => Promise<void>;
   handleDisconnect: () => void;
   handleLeave: () => Promise<void>;

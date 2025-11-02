@@ -100,6 +100,7 @@ function BlockingErrorModal({
 export default function PlayPage() {
   const router = useRouter();
   const [modeFromParams, setModeFromParams] = useState<GameModeKey>("free_for_all");
+  const [lobbyFromParams, setLobbyFromParams] = useState<string | null>(null);
   const [modeReady, setModeReady] = useState(false);
   const [isQuitting, setIsQuitting] = useState(false);
 
@@ -107,8 +108,11 @@ export default function PlayPage() {
     // Комментарий по сути: этот код выполнится только на клиенте после гидратации.
     // При статическом пререндере window недоступен, поэтому дефолт останется "free_for_all".
     try {
-      const mode = new URLSearchParams(window.location.search).get("mode");
+      const params = new URLSearchParams(window.location.search);
+      const mode = params.get("mode");
+      const lobby = params.get("lobby");
       setModeFromParams(resolveMode(mode));
+      setLobbyFromParams(lobby && lobby.trim().length > 0 ? lobby.trim() : null);
     } finally {
       setModeReady(true); // ← сигнал: параметр считан/нормализован
     }
@@ -122,6 +126,7 @@ export default function PlayPage() {
     status,
     error,
     isLocked,
+    lobbyName,
     previousState,
     currentState,
     lastStateTimestamp,
@@ -137,7 +142,7 @@ export default function PlayPage() {
     handleUsePowerUp,
     authBlockedReason,
     clearAuthBlock,
-  } = useGameClient(modeFromParams);
+  } = useGameClient(modeFromParams, lobbyFromParams);
 
   // Guard: если ника нет или короткий — назад на /main
   useEffect(() => {
@@ -264,6 +269,15 @@ export default function PlayPage() {
         {/* Правая колонка */}
         <div className="order-2 xl:order-3 w-full max-w-sm xl:w-full">
           <div className="bg-card-bg p-6 rounded-xl shadow-lg border border-gray-200">
+            <div className="mb-4 flex items-center justify-between gap-3">
+              <span className="text-[11px] uppercase tracking-[0.32em] text-slate-400">Lobby</span>
+              <span
+                className="max-w-[180px] truncate rounded-full bg-[var(--accent)]/12 px-3 py-1 text-sm font-semibold text-[var(--accent)] shadow-sm"
+                title={`Lobby: ${lobbyName ?? "matching"}`}
+              >
+                {lobbyName ?? "Matching..."}
+              </span>
+            </div>
             <h2 className="text-xl font-bold mb-4 border-b border-[var(--accent)]/50 text-[var(--accent)] pb-2 tracking-wide">
               Leaderboard
             </h2>

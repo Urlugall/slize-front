@@ -8,7 +8,10 @@ import { useGameStateStore } from '@/features/game/hooks/useGameStateStore';
 import { useKeyboardControls } from '@/features/game/hooks/useKeyboardControls';
 import type { GameClientResult } from '@/features/game/hooks/gameClientTypes';
 
-export function useGameClient(initialMode: GameModeKey = 'free_for_all'): GameClientResult {
+export function useGameClient(
+  initialMode: GameModeKey = 'free_for_all',
+  initialLobbyId: string | null = null,
+): GameClientResult {
   const [nickname, setNickname] = useState('');
   const [mode, setMode] = useState<GameModeKey>(initialMode);
   const [playerId, setPlayerId] = useState<string | null>(null);
@@ -40,6 +43,8 @@ export function useGameClient(initialMode: GameModeKey = 'free_for_all'): GameCl
     isLocked,
     isSilentlyReconnecting,
     playerId: resolvedPlayerId,
+    lobbyId,
+    lobbyName,
     sendMessage,
     handleConnect,
     handleDisconnect,
@@ -61,6 +66,7 @@ export function useGameClient(initialMode: GameModeKey = 'free_for_all'): GameCl
     },
     resetState,
     onPlayerIdChange: setPlayerId,
+    initialLobbyId,
   });
 
   useEffect(() => {
@@ -153,6 +159,8 @@ export function useGameClient(initialMode: GameModeKey = 'free_for_all'): GameCl
     setNickname,
     mode,
     setMode,
+    lobbyId,
+    lobbyName,
     status,
     error,
     isLocked,

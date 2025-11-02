@@ -126,6 +126,15 @@ export interface PlayerLeftPayload {
   slotId: number;
 }
 
+export interface LobbySummary {
+  id: string;
+  name: string;
+  mode: GameModeKey;
+  playerCount: number;
+  maxPlayers: number;
+  createdAt: number;
+}
+
 // --- Client/Server Messages ---
 
 // Клиент (добавляем 'switch_team')

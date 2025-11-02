@@ -25,6 +25,7 @@ interface UseGameConnectionOptions {
   callbacks: UseGameConnectionCallbacks;
   resetState: GameStateStore['resetState'];
   onPlayerIdChange?: (playerId: string | null) => void;
+  initialLobbyId?: string | null;
 }
 
 interface SocketMessageHandlers {
@@ -115,6 +116,8 @@ export interface UseGameConnectionResult {
   isLocked: boolean;
   isSilentlyReconnecting: boolean;
   playerId: string | null;
+  lobbyId: string | null;
+  lobbyName: string | null;
   token: string | null;
   socketRef: MutableRefObject<WebSocket | null>;
   sendMessage: (message: object) => void;
@@ -131,6 +134,7 @@ export function useGameConnection({
   callbacks,
   resetState,
   onPlayerIdChange,
+  initialLobbyId,
 }: UseGameConnectionOptions): UseGameConnectionResult {
   const [token, setToken] = useState<string | null>(null);
   const [playerId, setPlayerId] = useState<string | null>(null);
@@ -139,6 +143,8 @@ export function useGameConnection({
   const [isLocked, setIsLocked] = useState(false);
   const [isSilentlyReconnecting, setIsSilentlyReconnecting] = useState(false);
   const [authBlockedReason, setAuthBlockedReason] = useState<'nickname_in_use' | null>(null);
+  const [lobbyId, setLobbyId] = useState<string | null>(null);
+  const [lobbyName, setLobbyName] = useState<string | null>(null);
 
   const socketRef = useRef<WebSocket | null>(null);
   const connectingRef = useRef(false);
@@ -152,6 +158,16 @@ export function useGameConnection({
   const lastLobbyIdRef = useRef<string | null>(null);
   const silentReconnectingRef = useRef(false);
   const inputQueueRef = useRef<Array<{ t: number; msg: object }>>([]);
+  const lobbyNameRef = useRef<string | null>(null);
+  const preferredLobbyIdRef = useRef<string | null>(initialLobbyId ?? null);
+
+  useEffect(() => {
+    const normalized = initialLobbyId?.trim() ?? null;
+    preferredLobbyIdRef.current = normalized;
+    if (normalized) {
+      lastLobbyIdRef.current = normalized;
+    }
+  }, [initialLobbyId]);
 
   const reconnectInProgressRef = useRef<() => Promise<void>>(() => Promise.resolve());
   const scheduleReconnectRef = useRef<() => void>(() => { });
@@ -164,6 +180,13 @@ export function useGameConnection({
   const clearAuthBlock = useCallback(() => {
     setAuthBlockedReason(null);
     setError(null);
+  }, []);
+
+  const setLobbyMetadata = useCallback((id: string | null, name: string | null) => {
+    setLobbyId(id);
+    const normalizedName = name ?? null;
+    setLobbyName(normalizedName);
+    lobbyNameRef.current = normalizedName;
   }, []);
 
   const sendMessage = useCallback((message: object) => {
@@ -188,6 +211,102 @@ export function useGameConnection({
       }
     }
   }, []);
+
+  const joinLobbyById = useCallback(
+    async (
+      lobbyToJoin: string,
+      authToken: string,
+    ): Promise<{ lobbyId: string; mode: GameModeKey; name: string | null }> => {
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/lobbies/join`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ lobbyId: lobbyToJoin }),
+      });
+
+      if (!response.ok) {
+        let message = 'Failed to join lobby.';
+        try {
+          const data = await response.json();
+          if (typeof data?.error === 'string') message = data.error;
+        } catch {
+          /* ignore body parse */
+        }
+        const error = new Error(message);
+        (error as Error & { status?: number }).status = response.status;
+        throw error;
+      }
+
+      const payload = await response.json() as {
+        lobbyId: string;
+        mode: GameModeKey;
+        name?: string | null;
+      };
+
+      return {
+        lobbyId: payload.lobbyId,
+        mode: payload.mode,
+        name: payload.name ?? null,
+      };
+    },
+    [],
+  );
+
+  const resolveLobbyAssignment = useCallback(
+    async (authToken: string): Promise<{ lobbyId: string; name: string | null }> => {
+      const preferredId = preferredLobbyIdRef.current?.trim() || null;
+      if (preferredId) {
+        const result = await joinLobbyById(preferredId, authToken);
+        lastLobbyIdRef.current = result.lobbyId;
+        preferredLobbyIdRef.current = result.lobbyId;
+        setLobbyMetadata(result.lobbyId, result.name);
+        return { lobbyId: result.lobbyId, name: result.name };
+      }
+
+      let attempt = 0;
+      let candidateId = lastLobbyIdRef.current;
+      let lastError: Error | null = null;
+
+      while (attempt < 3) {
+        attempt += 1;
+
+        if (!candidateId) {
+          const response = await fetch(
+            `${process.env.NEXT_PUBLIC_API_URL}/lobbies/find-best?mode=${mode}`,
+            { headers: { Authorization: `Bearer ${authToken}` } },
+          );
+          if (!response.ok) {
+            let message = 'Could not find a lobby.';
+            try {
+              const data = await response.json();
+              if (typeof data?.error === 'string') message = data.error;
+            } catch {
+              /* ignore parse */
+            }
+            throw new Error(message);
+          }
+          const data = await response.json() as { lobbyId: string };
+          candidateId = data.lobbyId;
+        }
+
+        try {
+          const joined = await joinLobbyById(candidateId, authToken);
+          lastLobbyIdRef.current = joined.lobbyId;
+          preferredLobbyIdRef.current = null;
+          setLobbyMetadata(joined.lobbyId, joined.name);
+          return { lobbyId: joined.lobbyId, name: joined.name };
+        } catch (err) {
+          lastError = err instanceof Error ? err : new Error('Failed to join lobby.');
+          candidateId = null;
+        }
+      }
+
+      throw lastError ?? new Error('Could not join a lobby.');
+    },
+    [joinLobbyById, mode, setLobbyMetadata],
+  );
 
   const scheduleReconnect = useCallback((): void => {
     if (manualDisconnectRef.current || closingRef.current || unloadingRef.current) return;
@@ -409,8 +528,12 @@ export function useGameConnection({
     setToken(null);
     onPlayerIdChange?.(null);
     // при ручном дисконнекте не пытаемся вернуться в прежнее лобби
-    try { lastLobbyIdRef.current = null; } catch { /* noop */ }
-  }, [cleanupSocketLock, onPlayerIdChange, resetState]);
+    try {
+      lastLobbyIdRef.current = null;
+      preferredLobbyIdRef.current = null;
+    } catch { /* noop */ }
+    setLobbyMetadata(null, null);
+  }, [cleanupSocketLock, onPlayerIdChange, resetState, setLobbyMetadata]);
 
   const reconnectToLobby = useCallback(async () => {
     if (connectingRef.current) return;
@@ -422,24 +545,12 @@ export function useGameConnection({
     setError(null);
 
     try {
-      let lobbyId = lastLobbyIdRef.current;
-      if (!lobbyId) {
-        const response = await fetch(
-          `${process.env.NEXT_PUBLIC_API_URL}/lobbies/find-best?mode=${mode}`,
-          {
-            headers: { Authorization: `Bearer ${localStorage.getItem('slize_token')}` },
-          },
-        );
-        if (!response.ok) throw new Error('Could not find a lobby.');
-        const json = await response.json();
-        lobbyId = json.lobbyId as string;
-        lastLobbyIdRef.current = lobbyId;
-      }
-
       const authToken = token ?? localStorage.getItem('slize_token');
       if (!authToken || !nickname.trim()) throw new Error('Missing session data.');
 
-      const wsUrl = `${process.env.NEXT_PUBLIC_WS_URL}/lobbies/${lobbyId}/ws?token=${authToken}&nickname=${encodeURIComponent(
+      const { lobbyId: resolvedLobbyId } = await resolveLobbyAssignment(authToken);
+
+      const wsUrl = `${process.env.NEXT_PUBLIC_WS_URL}/lobbies/${resolvedLobbyId}/ws?token=${authToken}&nickname=${encodeURIComponent(
         nickname,
       )}&mode=${mode}`;
       const socket = new WebSocket(wsUrl);
@@ -462,6 +573,7 @@ export function useGameConnection({
     attachHandlers,
     mode,
     nickname,
+    resolveLobbyAssignment,
     releaseResourcesAfterClose,
     scheduleSilentReconnect,
     token,
@@ -581,17 +693,11 @@ export function useGameConnection({
 
       setStatus('finding_lobby');
 
-      const lobbyResponse = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/lobbies/find-best?mode=${mode}`,
-        { headers: { Authorization: `Bearer ${authToken}` } },
-      );
-      if (!lobbyResponse.ok) throw new Error('Could not find a lobby.');
-      const { lobbyId } = await lobbyResponse.json();
-      lastLobbyIdRef.current = lobbyId;
+      const { lobbyId: resolvedLobbyId } = await resolveLobbyAssignment(authToken);
 
       setStatus('connecting');
 
-      const wsUrl = `${process.env.NEXT_PUBLIC_WS_URL}/lobbies/${lobbyId}/ws?token=${authToken}&nickname=${encodeURIComponent(
+      const wsUrl = `${process.env.NEXT_PUBLIC_WS_URL}/lobbies/${resolvedLobbyId}/ws?token=${authToken}&nickname=${encodeURIComponent(
         nickname,
       )}&mode=${mode}`;
       const socket = new WebSocket(wsUrl);
@@ -618,15 +724,21 @@ export function useGameConnection({
       connectingRef.current = false;
     }
   }, [
-    nickname, mode, authBlockedReason, resetState, onPlayerIdChange, token, playerId,
-    cleanupSocketLock,
-    scheduleReconnect, // Added scheduleReconnect
-    scheduleSilentReconnect, // Added scheduleSilentReconnect
-    setTemporaryError, // Add setTemporaryError if used
-    attachHandlers, // Add attachHandlers
-    nickname, mode, authBlockedReason, token, playerId, resetState, onPlayerIdChange,
-    cleanupSocketLock, scheduleReconnect, scheduleSilentReconnect, setTemporaryError, attachHandlers,
-    setStatus, setError, setIsLocked, setToken, setPlayerId, setAuthBlockedReason
+    attachHandlers,
+    authBlockedReason,
+    mode,
+    nickname,
+    onPlayerIdChange,
+    playerId,
+    resetState,
+    resolveLobbyAssignment,
+    setAuthBlockedReason,
+    setError,
+    setIsLocked,
+    setPlayerId,
+    setStatus,
+    setToken,
+    token,
   ]);
 
   const handleLeave = useCallback(async () => {
@@ -674,16 +786,18 @@ export function useGameConnection({
         await closed;
       }
     } catch { /* noop */ }
-    releaseResourcesAfterClose();
-    resetState();
-    setStatus('disconnected');
-    setError(null);
-    silentReconnectingRef.current = false;
-    setIsSilentlyReconnecting(false);
-    setPlayerId(null);
-    onPlayerIdChange?.(null);
-    lastLobbyIdRef.current = null; // <- больше не пытаемся вернуться в старое лобби
-  }, [onPlayerIdChange, releaseResourcesAfterClose, resetState, token, setPlayerId, setError, setStatus]);
+    releaseResourcesAfterClose();
+    resetState();
+    setStatus('disconnected');
+    setError(null);
+    silentReconnectingRef.current = false;
+    setIsSilentlyReconnecting(false);
+    setPlayerId(null);
+    onPlayerIdChange?.(null);
+    lastLobbyIdRef.current = null; // <- больше не пытаемся вернуться в старое лобби
+    preferredLobbyIdRef.current = null;
+    setLobbyMetadata(null, null);
+  }, [onPlayerIdChange, releaseResourcesAfterClose, resetState, setLobbyMetadata, token, setPlayerId, setError, setStatus]);
 
 
   useEffect(() => {
@@ -692,7 +806,9 @@ export function useGameConnection({
 
   useEffect(() => {
     lastLobbyIdRef.current = null;
-  }, [mode]);
+    preferredLobbyIdRef.current = null;
+    setLobbyMetadata(null, null);
+  }, [mode, setLobbyMetadata]);
 
   useEffect(() => {
     const myLockId = lockIdRef.current;
@@ -810,6 +926,8 @@ export function useGameConnection({
     isLocked,
     isSilentlyReconnecting,
     playerId,
+    lobbyId,
+    lobbyName,
     token,
     socketRef,
     sendMessage,
